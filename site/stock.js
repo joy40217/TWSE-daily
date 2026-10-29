@@ -32,19 +32,96 @@ function change(i) {
   return { chg, pct: (chg / (c - chg)) * 100 };
 }
 
-function movingAverage(n) {
-  const out = [];
-  const win = [];
+// ---- 技術指標：依目前顯示的價格（還原或原始）計算，沒有成交的日子跳過 ----
+
+// 只取有成交的日子計算，再依日期展開回完整長度（沒有值的地方留白，圖表才能跟其他圖對齊）
+function compact() {
+  const idx = S.d.map((_, i) => i).filter((i) => S.c[i] != null);
+  return { idx, o: idx.map((i) => price("o", i)), h: idx.map((i) => price("h", i)),
+    l: idx.map((i) => price("l", i)), c: idx.map((i) => price("c", i)) };
+}
+
+function expand(idx, values, digits = 2) {
+  const full = new Array(S.d.length).fill(null);
+  idx.forEach((i, j) => { full[i] = values[j]; });
+  return S.d.map((t, i) => (full[i] == null || !isFinite(full[i]) ? { time: t } : { time: t, value: +full[i].toFixed(digits) }));
+}
+
+function sma(a, n) {
   let sum = 0;
-  S.d.forEach((t, i) => {
-    const c = price("c", i);
-    if (c == null) return out.push({ time: t });
-    win.push(c);
-    sum += c;
-    if (win.length > n) sum -= win.shift();
-    out.push(win.length === n ? { time: t, value: +(sum / n).toFixed(2) } : { time: t });
+  return a.map((v, i) => {
+    sum += v;
+    if (i >= n) sum -= a[i - n];
+    return i >= n - 1 ? sum / n : null;
   });
-  return out;
+}
+
+function ema(a, n) {
+  const k = 2 / (n + 1);
+  let e = null;
+  return a.map((v) => (e = e == null ? v : e + k * (v - e)));
+}
+
+// 布林通道：20 日均線 ± 2 個標準差
+function bollinger(c, n = 20, k = 2) {
+  const mid = sma(c, n);
+  const dev = c.map((_, i) => {
+    if (mid[i] == null) return null;
+    const w = c.slice(i - n + 1, i + 1);
+    return Math.sqrt(w.reduce((sum, v) => sum + (v - mid[i]) ** 2, 0) / n);
+  });
+  return {
+    mid,
+    upper: mid.map((m, i) => (m == null ? null : m + k * dev[i])),
+    lower: mid.map((m, i) => (m == null ? null : m - k * dev[i])),
+  };
+}
+
+// MACD(12, 26, 9)：DIF = EMA12 - EMA26，MACD = DIF 的 9 日 EMA，柱狀 = DIF - MACD
+function macd(c) {
+  const e12 = ema(c, 12), e26 = ema(c, 26);
+  const dif = c.map((_, i) => e12[i] - e26[i]);
+  const dea = ema(dif, 9);
+  return { dif, dea, osc: dif.map((v, i) => v - dea[i]) };
+}
+
+// KD(9, 3, 3)：台灣常用算法，RSV 取 9 日高低，K、D 以 1/3 權重平滑，起始值 50
+function kd(h, l, c, n = 9) {
+  let k = 50, d = 50;
+  const K = [], D = [];
+  c.forEach((v, i) => {
+    if (i < n - 1) {
+      K.push(null);
+      D.push(null);
+      return;
+    }
+    const hi = Math.max(...h.slice(i - n + 1, i + 1)), lo = Math.min(...l.slice(i - n + 1, i + 1));
+    const rsv = hi === lo ? 50 : ((v - lo) / (hi - lo)) * 100;
+    k = (2 / 3) * k + rsv / 3;
+    d = (2 / 3) * d + k / 3;
+    K.push(k);
+    D.push(d);
+  });
+  return { K, D };
+}
+
+// RSI：Wilder 平滑
+function rsi(c, n) {
+  let gain = 0, loss = 0;
+  return c.map((v, i) => {
+    if (i === 0) return null;
+    const diff = v - c[i - 1];
+    const g = Math.max(diff, 0), l = Math.max(-diff, 0);
+    if (i <= n) {
+      gain += g / n;
+      loss += l / n;
+      if (i < n) return null;
+    } else {
+      gain = (gain * (n - 1) + g) / n;
+      loss = (loss * (n - 1) + l) / n;
+    }
+    return loss === 0 ? 100 : 100 - 100 / (1 + gain / loss);
+  });
 }
 
 // 技術訊號：條件跟 scripts/report.py 的 scan_signals 相同，以還原收盤價計算
@@ -91,31 +168,109 @@ function candleData() {
     { time: t, open: price("o", i), high: price("h", i), low: price("l", i), close: price("c", i) }));
 }
 
+const MA_DAYS = [5, 20, 60, 100];
+const overlays = { ma: true, bb: false };
+
 function buildPriceChart() {
   const up = css("--up"), down = css("--down");
   const chart = LightweightCharts.createChart($("chart-price"), chartOptions());
   const candles = chart.addCandlestickSeries({
     upColor: up, downColor: down, borderUpColor: up, borderDownColor: down, wickUpColor: up, wickDownColor: down,
   });
-  candles.priceScale().applyOptions({ scaleMargins: { top: 0.05, bottom: 0.25 } });
-  const mas = [5, 20, 60].map((n) => [n, chart.addLineSeries({ ...LINE, color: css(`--ma${n}`) })]);
-  const volume = chart.addHistogramSeries({ priceScaleId: "vol", priceLineVisible: false, lastValueVisible: false });
-  chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
-  volume.setData(S.d.map((t, i) => {
-    if (S.v[i] == null) return { time: t };
-    const { chg } = change(i);
-    return { time: t, value: S.v[i], color: (chg != null && chg < 0 ? down : up) + "88" };
-  }));
+  const mas = MA_DAYS.map((n) => [n, chart.addLineSeries({ ...LINE, color: css(`--ma${n}`) })]);
+  const bb = ["upper", "mid", "lower"].map((k) =>
+    [k, chart.addLineSeries({ ...LINE, color: css("--bb"), lineStyle: k === "mid" ? 2 : 0 })]);
   const exDays = new Set(S.d);
   const markers = S.ex.filter(([d]) => exDays.has(d))
     .map(([d, type]) => ({ time: d, position: "belowBar", shape: "circle", color: css("--accent"), text: `除${type}` }));
   const draw = () => {
+    const p = compact();
     candles.setData(candleData());
-    for (const [n, s] of mas) s.setData(movingAverage(n));
+    for (const [n, s] of mas) {
+      s.setData(expand(p.idx, sma(p.c, n)));
+      s.applyOptions({ visible: overlays.ma });
+    }
+    const band = bollinger(p.c);
+    for (const [k, s] of bb) {
+      s.setData(expand(p.idx, band[k]));
+      s.applyOptions({ visible: overlays.bb });
+    }
     candles.setMarkers(markers);
+    charts.drawIndicators(p);
   };
-  draw();
   Object.assign(charts, { price: chart, draw });
+  return chart;
+}
+
+// K 線下方的副圖：成交量、MACD、KD、RSI 擇一顯示
+const INDICATORS = [["vol", "成交量"], ["macd", "MACD"], ["kd", "KD"], ["rsi", "RSI"]];
+let indicator = "vol";
+
+function buildIndicatorChart() {
+  const up = css("--up"), down = css("--down");
+  const chart = LightweightCharts.createChart($("chart-ind"), chartOptions());
+  const hist = () => chart.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false });
+  const line = (color) => chart.addLineSeries({ ...LINE, color });
+  const groups = {
+    vol: { volume: hist() },
+    macd: { osc: hist(), dif: line(css("--ma5")), dea: line(css("--ma20")) },
+    kd: { K: line(css("--ma5")), D: line(css("--ma20")) },
+    rsi: { r6: line(css("--ma5")), r12: line(css("--ma20")) },
+  };
+  // 超買、超賣參考線
+  const guide = { color: css("--muted"), lineWidth: 1, lineStyle: 2, axisLabelVisible: false };
+  for (const v of [20, 80]) groups.kd.K.createPriceLine({ ...guide, price: v });
+  for (const v of [30, 70]) groups.rsi.r6.createPriceLine({ ...guide, price: v });
+
+  const values = { idx: [] };
+  charts.drawIndicators = (p) => {
+    groups.vol.volume.setData(S.d.map((t, i) => {
+      if (S.v[i] == null) return { time: t };
+      const { chg } = change(i);
+      return { time: t, value: S.v[i], color: (chg != null && chg < 0 ? down : up) + "88" };
+    }));
+    const m = macd(p.c), k = kd(p.h, p.l, p.c);
+    Object.assign(values, { idx: p.idx, dif: m.dif, dea: m.dea, osc: m.osc, K: k.K, D: k.D, r6: rsi(p.c, 6), r12: rsi(p.c, 12) });
+    groups.macd.osc.setData(expand(p.idx, m.osc).map((x) => ("value" in x ? { ...x, color: (x.value >= 0 ? up : down) + "88" } : x)));
+    for (const key of ["dif", "dea"]) groups.macd[key].setData(expand(p.idx, values[key]));
+    for (const key of ["K", "D"]) groups.kd[key].setData(expand(p.idx, values[key]));
+    for (const key of ["r6", "r12"]) groups.rsi[key].setData(expand(p.idx, values[key]));
+  };
+
+  // 說明列：顯示游標所在日（沒有則最新一天）的指標數值
+  let shown = S.d.length - 1;
+  charts.showIndLegend = (i = shown) => {
+    shown = i;
+    const j = values.idx.indexOf(i);
+    const v = (key) => (j < 0 ? null : values[key][j]);
+    const d = S.d[i];
+    $("legend-ind").innerHTML = {
+      vol: `${d}　量 ${nf(S.v[i])} 張`,
+      macd: `${d}　DIF ${nf(v("dif"), 2)}　MACD ${nf(v("dea"), 2)}　柱 <span class="${tone(v("osc"))}">${signed(v("osc"), 2)}</span>`,
+      kd: `${d}　K ${nf(v("K"), 1)}　D ${nf(v("D"), 1)}`,
+      rsi: `${d}　RSI6 ${nf(v("r6"), 1)}　RSI12 ${nf(v("r12"), 1)}`,
+    }[indicator];
+  };
+
+  const tabs = $("ind-tabs");
+  charts.showIndicator = (key) => {
+    indicator = key;
+    for (const [g, list] of Object.entries(groups)) for (const s of Object.values(list)) s.applyOptions({ visible: g === key });
+    chart.applyOptions({ localization: { locale: "zh-TW", priceFormatter: (v) => nf(v, key === "vol" ? 0 : 2) } });
+    tabs.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.ind === key));
+    $("ind-note").innerHTML = {
+      vol: "成交量，單位：張。",
+      macd: `<span class="ma5">DIF</span>（EMA12 − EMA26）、<span class="ma20">MACD</span>（DIF 的 9 日 EMA），柱狀為 DIF − MACD。`,
+      kd: `<span class="ma5">K</span>、<span class="ma20">D</span>（9 日），虛線為 20、80。`,
+      rsi: `<span class="ma5">RSI 6</span>、<span class="ma20">RSI 12</span>，虛線為 30、70。`,
+    }[key];
+    charts.showIndLegend();
+  };
+  tabs.innerHTML = INDICATORS.map(([k, label]) => `<button type="button" data-ind="${k}">${label}</button>`).join("");
+  tabs.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-ind]");
+    if (b) charts.showIndicator(b.dataset.ind);
+  });
   return chart;
 }
 
@@ -138,9 +293,11 @@ function buildInstChart() {
 function buildMarginChart() {
   if (!has("mf")) return null;
   const chart = LightweightCharts.createChart($("chart-margin"), chartOptions());
-  chart.applyOptions({ leftPriceScale: { visible: true }, localization: { locale: "zh-TW", priceFormatter: (p) => nf(p) } });
+  chart.applyOptions({ localization: { locale: "zh-TW", priceFormatter: (p) => nf(p) } });
   chart.addLineSeries({ ...LINE, lineWidth: 2, color: css("--financing") }).setData(series("mf"));
-  chart.addLineSeries({ ...LINE, lineWidth: 2, color: css("--short"), priceScaleId: "left" }).setData(series("ms"));
+  // 融券數量通常小很多，用不顯示刻度的獨立座標畫出走勢（不放左側刻度，才能跟其他圖左右對齊），數值看說明列
+  chart.addLineSeries({ ...LINE, lineWidth: 2, color: css("--short"), priceScaleId: "short" }).setData(series("ms"));
+  chart.priceScale("short").applyOptions({ visible: false, scaleMargins: { top: 0.1, bottom: 0.1 } });
   return chart;
 }
 
@@ -183,6 +340,7 @@ function buildRevenueChart() {
 function buildCharts() {
   const daily = [
     [buildPriceChart(), "chart-price", null],
+    [buildIndicatorChart(), "chart-ind", null],
     [buildInstChart(), "chart-inst", "panel-inst"],
     [buildMarginChart(), "chart-margin", "panel-margin"],
     [buildValueChart(), "chart-value", "panel-value"],
@@ -194,6 +352,8 @@ function buildCharts() {
   for (const [chart] of live) {
     chart.subscribeCrosshairMove((p) => showLegends(p.time ? S.d.indexOf(timeKey(p.time)) : S.d.length - 1));
   }
+  charts.draw();
+  charts.showIndicator(indicator);
   if (!buildRevenueChart()) {
     $("chart-rev").hidden = true;
     if (!S.rev.length) $("panel-rev").hidden = true;
@@ -216,6 +376,7 @@ function showLegends(i) {
     `${d}　開 ${nf(price("o", i), 2)}　高 ${nf(price("h", i), 2)}　低 ${nf(price("l", i), 2)}` +
     `　收 <b class="${tone(chg)}">${nf(price("c", i), 2)}</b> <span class="${tone(chg)}">${signed(chg, 2)}（${signed(pct, 2, "%")}）</span>` +
     `　量 ${nf(S.v[i])} 張　金額 ${nf(S.val[i] / 100, 2)} 億`;
+  charts.showIndLegend(i);
   if (has("fi")) {
     const total = S.fi[i] == null ? null : S.fi[i] + (S.tr[i] ?? 0) + (S.dl[i] ?? 0);
     $("legend-inst").innerHTML = total == null ? `${d}　無資料` :
@@ -330,6 +491,14 @@ async function init() {
     range = +b.dataset.range;
     document.querySelectorAll(".ranges button").forEach((x) => x.classList.toggle("on", x === b));
     focusRange();
+  });
+  document.querySelector("[data-overlay]").parentElement.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-overlay]");
+    if (!b) return;
+    overlays[b.dataset.overlay] = !overlays[b.dataset.overlay];
+    b.classList.toggle("on", overlays[b.dataset.overlay]);
+    b.setAttribute("aria-pressed", overlays[b.dataset.overlay]);
+    charts.draw();
   });
   document.querySelector("[data-adjust]").parentElement.addEventListener("click", (e) => {
     const b = e.target.closest("[data-adjust]");

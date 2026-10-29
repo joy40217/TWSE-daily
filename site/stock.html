@@ -35,6 +35,10 @@
           <button type="button" data-adjust="1" class="on">還原權息</button>
           <button type="button" data-adjust="0">原始價格</button>
         </div>
+        <div class="tabs" role="group" aria-label="疊加指標">
+          <button type="button" data-overlay="ma" class="on" aria-pressed="true">均線</button>
+          <button type="button" data-overlay="bb" aria-pressed="false">布林通道</button>
+        </div>
         <div class="ranges" role="group" aria-label="顯示範圍">
           <button type="button" data-range="63">3 月</button>
           <button type="button" data-range="126">6 月</button>
@@ -44,7 +48,14 @@
         </div>
       </div>
       <div class="chart" id="chart-price"></div>
-      <p class="note">均線：<span class="ma5">MA5</span>　<span class="ma20">MA20</span>　<span class="ma60">MA60</span>；下方為成交量（張）；「除」標記為除權息日。
+      <div class="panel-head sub-head">
+        <div class="tabs" id="ind-tabs" role="group" aria-label="副圖指標"></div>
+        <div class="legend" id="legend-ind"></div>
+      </div>
+      <div class="chart chart-ind" id="chart-ind"></div>
+      <p class="note" id="ind-note"></p>
+      <p class="note">均線：<span class="ma5">MA5</span>　<span class="ma20">MA20</span>　<span class="ma60">MA60</span>　<span class="ma100">MA100</span>；
+        <span class="bb">布林通道</span>為 20 日均線 ± 2 個標準差；「除」標記為除權息日。
         還原權息只處理除權息，減資、面額變更（例如股票分割）的日子會有跳空。</p>
     </section>
 
@@ -57,7 +68,7 @@
     <section class="panel" id="panel-margin">
       <div class="panel-head"><h2>融資融券餘額</h2><div class="legend" id="legend-margin"></div></div>
       <div class="chart chart-sm" id="chart-margin"></div>
-      <p class="note"><span class="financing">融資餘額</span>（右軸）、<span class="short">融券餘額</span>（左軸）。單位：張。</p>
+      <p class="note"><span class="financing">融資餘額</span>（刻度在右）、<span class="short">融券餘額</span>（走勢，數值見上方）。單位：張。</p>
     </section>
 
     <section class="panel" id="panel-value">

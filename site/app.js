@@ -37,7 +37,7 @@ function buildCharts() {
   });
   candles.priceScale().applyOptions({ scaleMargins: { top: 0.05, bottom: 0.25 } });
   candles.setData(index.map((d) => ({ time: d.d, open: d.o, high: d.h, low: d.l, close: d.c })));
-  const mas = [5, 20, 60].map((n) => {
+  const mas = [5, 20, 60, 100].map((n) => {
     const s = main.addLineSeries({ ...LINE, color: css(`--ma${n}`) });
     s.setData(movingAverage(n));
     return s;
@@ -144,12 +144,13 @@ const panel = (title, items, cols, emptyText) => `<div class="panel"><h3>${title
 function renderLists(r) {
   const L = r.lists;
   const value = ["成交（億）", (s) => nf(s.value, 1)];
+  const valueM = ["成交（百萬）", (s) => nf(s.value * 100, 1)];   // 漲跌幅排行常有小型股，用百萬才看得出差異
   const net = ["買賣超（億）", (s) => `<span class="${tone(s.value)}">${signed(s.value, 2)}</span>`];
   const marginCols = [["融資增減", (s) => `<span class="${tone(s.change)}">${signed(s.change)}</span>`], ["融資餘額", (s) => nf(s.balance)]];
   const noInst = "三大法人資料尚未公布", noMargin = "融資融券尚未公布（約晚間公布）";
   $("lists").innerHTML = [
-    panel("漲幅排行", L.gainers, [...STOCK_COLS, value]),
-    panel("跌幅排行", L.losers, [...STOCK_COLS, value]),
+    panel("漲幅排行", L.gainers, [...STOCK_COLS, valueM]),
+    panel("跌幅排行", L.losers, [...STOCK_COLS, valueM]),
     panel("成交金額排行", L.turnover, [...STOCK_COLS, value]),
     panel("外資買超", L.foreign_buy, [...STOCK_COLS, net], noInst),
     panel("外資賣超", L.foreign_sell, [...STOCK_COLS, net], noInst),

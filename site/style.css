@@ -11,6 +11,8 @@
   --ma5: #f5a623;
   --ma20: #3b82f6;
   --ma60: #a855f7;
+  --ma100: #14b8a6;
+  --bb: #94a3b8;
   --foreign: #0ea5e9;
   --trust: #f97316;
   --financing: #3b82f6;
@@ -110,8 +112,11 @@ h3 { font-size: 15px; margin: 0 0 8px; }
 
 .chart { height: 420px; }
 .chart-sm { height: 240px; }
+.chart-ind { height: 170px; }
+.sub-head { margin: 10px 0 4px; }
 .note { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
-.ma5 { color: var(--ma5); } .ma20 { color: var(--ma20); } .ma60 { color: var(--ma60); }
+.ma5 { color: var(--ma5); } .ma20 { color: var(--ma20); } .ma60 { color: var(--ma60); } .ma100 { color: var(--ma100); }
+.bb { color: var(--bb); }
 .foreign { color: var(--foreign); } .trust { color: var(--trust); }
 .financing { color: var(--financing); } .short { color: var(--short); }
 .yoy { color: var(--yoy); }

@@ -10,7 +10,7 @@
      產生 site/data/days/<年>/<日期>.json（會 commit 進 repo）
   3. 重新產生 site/data/index.json（每個交易日的大盤摘要，給網頁圖表用；每次重建，不進 git）
   4. 重新產生個股頁面資料 site/data/stocks/（見 stock_data.py；每次重建，不進 git）
-  5. 最新交易日的報告若是這次新產生的，在 GitHub Actions 輸出 new_day=<日期>，
+  5. 最新交易日的報告若是這次第一次產生的（補資料重新產生的不算），在 GitHub Actions 輸出 new_day=<日期>，
      workflow 會在網頁發布後再送 Discord，避免通知先到、網頁還沒更新
 
 法人買賣超金額 = 買賣超股數 × 當日收盤價，是估算值。
@@ -36,6 +36,7 @@ TOP = 10                 # 排行榜列幾檔
 SIGNAL_TOP = 20          # 每種技術訊號最多列幾檔
 SIGNAL_MIN_VALUE = 1e8   # 當日成交金額低於 1 億的股票不列入技術訊號，避免冷門股雜訊
 YI = 1e8                 # 億
+REPORT_VERSION = 2       # 報告格式改變時加 1，舊的報告會在下次執行時全部重新產生
 num = build_db.num
 first = stock_data.first
 
@@ -117,7 +118,7 @@ def day_report(con, have, day, prev_close, signals):
         stocks[r["Code"]] = {
             "code": r["Code"], "name": r["Name"], "close": c,
             "pct": round(chg / base * 100, 2) if base else None,
-            "value": round((num(r["TradeValue"]) or 0) / YI, 2),
+            "value": round((num(r["TradeValue"]) or 0) / YI, 4),   # 億；小型股要到百萬位才看得出差異
             "chg": chg,
         }
     traded = [s for s in stocks.values() if s["close"] is not None and s["chg"] is not None]
@@ -187,6 +188,7 @@ def day_report(con, have, day, prev_close, signals):
 
     sig = signals.get(day, {})
     return {
+        "version": REPORT_VERSION,
         "date": day,
         "market": market,
         "institutional": inst,
@@ -198,12 +200,18 @@ def day_report(con, have, day, prev_close, signals):
     }
 
 
+def day_path(day):
+    return DAYS_DIR / day[:4] / f"{day}.json"
+
+
 def needs_update(con, have, day):
-    """還沒有報告，或當時融資融券、三大法人還沒公布但現在有了"""
-    path = DAYS_DIR / day[:4] / f"{day}.json"
+    """還沒有報告、報告格式是舊版，或當時融資融券、三大法人還沒公布但現在有了"""
+    path = day_path(day)
     if not path.exists():
         return True
     old = json.loads(path.read_text(encoding="utf-8"))
+    if old.get("version") != REPORT_VERSION:
+        return True
     for key, table in (("margin", "margin"), ("institutional", "institutional")):
         if old.get(key) is None and table in have and \
                 con.execute(f"SELECT 1 FROM {table} WHERE _key = ? LIMIT 1", (day,)).fetchone():
@@ -238,7 +246,7 @@ def taiex_png(index, day):
         ax.vlines(i, d["l"], d["h"], color=color, linewidth=1)
         ax.bar(i, max(abs(d["c"] - d["o"]), d["c"] * 0.0003), bottom=min(d["o"], d["c"]), color=color, width=0.6)
         axv.bar(i, d["v"], color=color, width=0.6, alpha=0.8)
-    for n, color in ((5, "#f5a623"), (20, "#3b82f6"), (60, "#a855f7")):
+    for n, color in ((5, "#f5a623"), (20, "#3b82f6"), (60, "#a855f7"), (100, "#14b8a6")):
         ma = [sum(closes[j - n + 1:j + 1]) / n if j >= n - 1 else None for j in range(end)][-len(data):]
         ax.plot(x, ma, color=color, linewidth=1.2, label=f"MA{n}")
     last = data[-1]
@@ -315,7 +323,7 @@ def page_url():
 
 
 def load_day(day):
-    return json.loads((DAYS_DIR / day[:4] / f"{day}.json").read_text(encoding="utf-8"))
+    return json.loads(day_path(day).read_text(encoding="utf-8"))
 
 
 def notify(day) -> int:
@@ -342,12 +350,13 @@ def main() -> int:
     available = {r[0] for r in con.execute("SELECT DISTINCT _key FROM stock_day_all")}
     days = [d for d, _ in taiex_rows if d in available]
     targets = {d for d in days if needs_update(con, have, d)}
+    brand_new = {d for d in targets if not day_path(d).exists()}   # 只有第一次產生才通知，補資料重產不重複通知
     print(f"共 {len(days)} 個交易日，這次要產生 {len(targets)} 份報告")
 
     signals = scan_signals(con, targets) if targets else {}
     for day in sorted(targets):
         report = day_report(con, have, day, prev_close[day], signals)
-        out = DAYS_DIR / day[:4] / f"{day}.json"
+        out = day_path(day)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(report, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"已產生 {stock_data.build(con, have)} 檔個股資料（site/data/stocks/）")
@@ -356,7 +365,7 @@ def main() -> int:
     # 給網頁圖表用的每日摘要
     index = []
     for day in days:
-        if not (DAYS_DIR / day[:4] / f"{day}.json").exists():
+        if not day_path(day).exists():
             continue
         r = load_day(day)
         m, inst = r["market"], r["institutional"] or {}
@@ -368,7 +377,7 @@ def main() -> int:
     print(f"已更新 site/data/index.json（{len(index)} 天）")
 
     latest = days[-1]
-    if latest in targets:
+    if latest in brand_new:
         print(f"最新交易日 {latest} 的報告是新產生的，可以送出通知")
         if os.environ.get("GITHUB_OUTPUT"):
             with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:

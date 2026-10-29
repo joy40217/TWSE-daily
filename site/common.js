@@ -28,7 +28,8 @@ function chartOptions() {
     },
     grid: { vertLines: { color: css("--grid") }, horzLines: { color: css("--grid") } },
     leftPriceScale: { borderVisible: false },
-    rightPriceScale: { borderVisible: false },
+    // 同步捲動的圖要左右對齊，右側刻度固定寬度（刻度寬度不同時，同一個日期會落在不同的水平位置）
+    rightPriceScale: { borderVisible: false, minimumWidth: 80 },
     timeScale: { borderVisible: false },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     localization: { locale: "zh-TW", priceFormatter: (p) => nf(p, 2) },
