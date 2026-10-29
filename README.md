@@ -5,23 +5,23 @@
 
 ## 資料集
 
-| 資料夾 | 內容 | 來源 |
+| 資料夾 | 內容 | 證交所報表 |
 |---|---|---|
-| `stock_day_all/` | 個股日成交（K 線開高低收量） | 網站 MI_INDEX |
-| `bwibbu_all/` | 本益比 / 殖利率 / 淨值比 | 網站 BWIBBU_d |
-| `margin/` | 融資融券 | 網站 MI_MARGN |
-| `institutional/` | 三大法人買賣超（不含權證） | 網站 T86 |
-| `taiex/` | 加權指數日 K | 網站 MI_5MINS_HIST |
-| `ex_rights/` | 除權除息計算結果（只在有除權息的日子產生） | 網站 TWT49U |
-| `monthly_revenue/` | 上市公司月營收（依資料年月存檔） | OpenAPI |
-| `holiday_schedule/` | 休市日程（只保留最新一份） | OpenAPI |
+| `stock_day_all/` | 個股日成交（K 線開高低收量） | [每日收盤行情](https://www.twse.com.tw/zh/trading/historical/mi-index.html) |
+| `bwibbu_all/` | 本益比 / 殖利率 / 淨值比 | [個股日本益比、殖利率及股價淨值比](https://www.twse.com.tw/zh/trading/historical/bwibbu-day.html) |
+| `margin/` | 融資融券 | [融資融券餘額](https://www.twse.com.tw/zh/trading/margin/mi-margn.html) |
+| `institutional/` | 三大法人買賣超（不含權證） | [三大法人買賣超日報](https://www.twse.com.tw/zh/trading/foreign/t86.html) |
+| `taiex/` | 加權指數日 K | [發行量加權股價指數歷史資料](https://www.twse.com.tw/zh/indices/taiex/mi-5min-hist.html) |
+| `ex_rights/` | 除權除息計算結果（只在有除權息的日子產生） | [除權除息計算結果表](https://www.twse.com.tw/zh/announcement/ex-right/twt49u.html) |
+| `monthly_revenue/` | 上市公司月營收（依資料年月存檔） | [OpenAPI](https://openapi.twse.com.tw/) 上市公司每月營業收入彙總表 |
+| `holiday_schedule/` | 休市日程（只保留最新一份） | [OpenAPI](https://openapi.twse.com.tw/) 有價證券集中交易市場開（休）市日期 |
 
 檔案路徑為 `data/<資料夾>/<年>/<日期>.csv`，例如 `data/stock_day_all/2026/2026-10-29.csv`；
 日期是資料本身的交易日，已存在的檔案不會被覆寫，假日也不會產生檔案。
 
-「網站」指[證交所網站的歷史查詢](https://www.twse.com.tw/zh/trading/historical/mi-index.html)，
-可以指定日期查詢，收盤後當天就有資料；欄位已轉成跟 [OpenAPI](https://openapi.twse.com.tw/) 相同的格式。
-OpenAPI 的每日行情要到隔天才更新，所以只用在月營收、休市日程這類沒有日期問題的資料。
+除了最後兩項，資料都是用證交所網站的查詢功能依日期抓取，收盤後當天就有資料，
+欄位也轉成跟 OpenAPI 相同的格式。OpenAPI 的每日行情要到隔天才更新，
+所以只用在月營收、休市日程這類沒有日期問題的資料。
 
 ## 設定步驟
 
