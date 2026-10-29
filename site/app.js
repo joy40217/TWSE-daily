@@ -1,16 +1,5 @@
 // 台股收盤報告：讀取 data/index.json（每日大盤摘要）與 data/days/<年>/<日期>.json（單日報告）
-//
-// 圖表使用 Lightweight Charts（Apache License 2.0），依授權附上 NOTICE：
-//   TradingView Lightweight Charts™
-//   Copyright (с) 2023 TradingView, Inc. https://www.tradingview.com/
-// 頁尾已有連到 tradingview.com 的標示，所以關掉圖表上的 attribution logo。
-const $ = (id) => document.getElementById(id);
-const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-const nf = (v, d = 0) => (v == null ? "—" : v.toLocaleString("zh-TW", { minimumFractionDigits: d, maximumFractionDigits: d }));
-const signed = (v, d = 0, unit = "") => (v == null ? "—" : (v > 0 ? "+" : "") + nf(v, d) + unit);
-const tone = (v) => (v > 0 ? "up" : v < 0 ? "down" : "");
-const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
-const timeKey = (t) => (typeof t === "string" ? t : `${t.year}-${String(t.month).padStart(2, "0")}-${String(t.day).padStart(2, "0")}`);
+// 共用的工具函式（格式、圖表設定、同步、搜尋）在 common.js
 
 let index = [];
 let dates = [];
@@ -19,33 +8,12 @@ let range = 126;
 const cache = {};
 const charts = {};
 
-async function getJSON(url) {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`${url}：HTTP ${r.status}`);
-  return r.json();
-}
-
 async function loadDay(d) {
   cache[d] ??= getJSON(`data/days/${d.slice(0, 4)}/${d}.json`);
   return cache[d];
 }
 
 // ---- 圖表 ----
-
-function chartOptions() {
-  return {
-    autoSize: true,
-    layout: {
-      background: { color: "transparent" }, textColor: css("--muted"),
-      fontFamily: getComputedStyle(document.body).fontFamily, attributionLogo: false,
-    },
-    grid: { vertLines: { color: css("--grid") }, horzLines: { color: css("--grid") } },
-    rightPriceScale: { borderVisible: false },
-    timeScale: { borderVisible: false },
-    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-    localization: { locale: "zh-TW", priceFormatter: (p) => nf(p, 2) },
-  };
-}
 
 function movingAverage(n) {
   const out = [];
@@ -69,9 +37,8 @@ function buildCharts() {
   });
   candles.priceScale().applyOptions({ scaleMargins: { top: 0.05, bottom: 0.25 } });
   candles.setData(index.map((d) => ({ time: d.d, open: d.o, high: d.h, low: d.l, close: d.c })));
-  const line = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
   const mas = [5, 20, 60].map((n) => {
-    const s = main.addLineSeries({ ...line, color: css(`--ma${n}`) });
+    const s = main.addLineSeries({ ...LINE, color: css(`--ma${n}`) });
     s.setData(movingAverage(n));
     return s;
   });
@@ -88,25 +55,15 @@ function buildCharts() {
     return { time: d.d, value: v, color: alpha(v >= 0 ? up : down) };
   }));
   const instLine = (key, color) => {
-    const s = inst.addLineSeries({ ...line, color });
+    const s = inst.addLineSeries({ ...LINE, color });
     s.setData(index.map((d) => (d[key] == null ? { time: d.d } : { time: d.d, value: d[key] })));
     return s;
   };
   instLine("f", css("--foreign"));
   instLine("t", css("--trust"));
 
-  // 兩張圖同步捲動、縮放（資料日期相同，可以直接對齊 logical range）。
-  // 範圍變更是非同步套用的，雙向同步會互相蓋回舊範圍，所以只由正在操作的那張圖帶動另一張
-  const pairs = [[main, inst, "chart-taiex"], [inst, main, "chart-inst"]];
-  for (const [from, to, id] of pairs) {
-    for (const ev of ["pointerdown", "pointerenter", "wheel", "touchstart"]) {
-      $(id).addEventListener(ev, () => { charts.driver = from; }, { passive: true });
-    }
-    from.timeScale().subscribeVisibleLogicalRangeChange((r) => {
-      if (r && charts.driver === from) to.timeScale().setVisibleLogicalRange(r);
-    });
-  }
-  charts.driver = main;
+  // 兩張圖同步捲動、縮放
+  charts.sync = syncCharts([[main, $("chart-taiex")], [inst, $("chart-inst")]]);
 
   // 點 K 棒切換日期
   for (const c of [main, inst]) c.subscribeClick((p) => p.time && go(timeKey(p.time)));
@@ -140,7 +97,7 @@ function showInstLegend(d) {
 function focusChart() {
   const i = dates.indexOf(current);
   const from = range ? i - range + 1 : 0;
-  charts.driver = charts.main;
+  charts.sync.driver = charts.main;
   charts.main.timeScale().setVisibleLogicalRange({ from, to: i + 3 });
   charts.candles.setMarkers([{ time: current, position: "aboveBar", shape: "arrowDown", color: css("--accent") }]);
   showLegend(current);
@@ -177,7 +134,7 @@ function table(items, cols, emptyText = "沒有資料") {
   if (!items || !items.length) return `<div class="empty">${emptyText}</div>`;
   const head = cols.map(([h]) => `<th>${h}</th>`).join("");
   const body = items.map((s) =>
-    `<tr><td>${esc(s.code)}</td><td class="name" title="${esc(s.name)}">${esc(s.name)}</td>${cols.map(([, f]) => `<td>${f(s)}</td>`).join("")}</tr>`
+    `<tr><td>${stockLink(s.code)}</td><td class="name" title="${esc(s.name)}">${stockLink(s.code, s.name)}</td>${cols.map(([, f]) => `<td>${f(s)}</td>`).join("")}</tr>`
   ).join("");
   return `<div class="table-scroll"><table><thead><tr><th>代號</th><th>名稱</th>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
@@ -271,7 +228,7 @@ async function init() {
   $("prev").addEventListener("click", () => go(dates[dates.indexOf(current) - 1]));
   $("next").addEventListener("click", () => go(dates[dates.indexOf(current) + 1]));
   document.addEventListener("keydown", (e) => {
-    if (e.target.tagName === "SELECT") return;
+    if (["SELECT", "INPUT"].includes(e.target.tagName)) return;
     if (e.key === "ArrowLeft" && !$("prev").disabled) $("prev").click();
     if (e.key === "ArrowRight" && !$("next").disabled) $("next").click();
   });
@@ -289,7 +246,7 @@ async function init() {
     renderSignals(await loadDay(current));
   });
   window.addEventListener("hashchange", () => go(location.hash.slice(1)));
-  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => location.reload());
+  setupStockSearch($("search"));
 
   go(location.hash.slice(1));
 }

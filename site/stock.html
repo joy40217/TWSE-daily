@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>個股資訊</title>
+  <meta name="description" content="由臺灣證交所資料整理的個股日 K、三大法人、融資融券、本益比與月營收">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='6' y='10' width='6' height='14' fill='%23e5484d'/><rect x='8.5' y='5' width='1' height='24' fill='%23e5484d'/><rect x='20' y='8' width='6' height='10' fill='%2330a46c'/><rect x='22.5' y='4' width='1' height='18' fill='%2330a46c'/></svg>">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap top-inner">
+      <div>
+        <h1 id="title">個股資訊</h1>
+        <p class="sub" id="subtitle">載入中…</p>
+      </div>
+      <input id="search" class="search" type="search" placeholder="查個股：代號或名稱" aria-label="查個股" autocomplete="off">
+      <nav class="links">
+        <a href="index.html" id="back">← 收盤報告</a>
+        <a id="yahoo" target="_blank" rel="noopener">Yahoo 股市 ↗</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap" id="main">
+    <section class="cards" id="cards" aria-label="個股摘要"></section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>日 K 線</h2>
+        <div class="legend" id="legend-price"></div>
+        <div class="tabs" role="group" aria-label="價格">
+          <button type="button" data-adjust="1" class="on">還原權息</button>
+          <button type="button" data-adjust="0">原始價格</button>
+        </div>
+        <div class="ranges" role="group" aria-label="顯示範圍">
+          <button type="button" data-range="63">3 月</button>
+          <button type="button" data-range="126">6 月</button>
+          <button type="button" data-range="250" class="on">1 年</button>
+          <button type="button" data-range="750">3 年</button>
+          <button type="button" data-range="0">全部</button>
+        </div>
+      </div>
+      <div class="chart" id="chart-price"></div>
+      <p class="note">均線：<span class="ma5">MA5</span>　<span class="ma20">MA20</span>　<span class="ma60">MA60</span>；下方為成交量（張）；「除」標記為除權息日。
+        還原權息只處理除權息，減資、面額變更（例如股票分割）的日子會有跳空。</p>
+    </section>
+
+    <section class="panel" id="panel-inst">
+      <div class="panel-head"><h2>三大法人買賣超</h2><div class="legend" id="legend-inst"></div></div>
+      <div class="chart chart-sm" id="chart-inst"></div>
+      <p class="note">長條為三大法人合計，線為<span class="foreign">外資</span>、<span class="trust">投信</span>。單位：張。</p>
+    </section>
+
+    <section class="panel" id="panel-margin">
+      <div class="panel-head"><h2>融資融券餘額</h2><div class="legend" id="legend-margin"></div></div>
+      <div class="chart chart-sm" id="chart-margin"></div>
+      <p class="note"><span class="financing">融資餘額</span>（右軸）、<span class="short">融券餘額</span>（左軸）。單位：張。</p>
+    </section>
+
+    <section class="panel" id="panel-value">
+      <div class="panel-head">
+        <h2>本益比、殖利率、淨值比</h2>
+        <div class="legend" id="legend-value"></div>
+        <div class="tabs" id="value-tabs" role="group" aria-label="指標"></div>
+      </div>
+      <div class="chart chart-sm" id="chart-value"></div>
+      <p class="note">虧損時沒有本益比。</p>
+    </section>
+
+    <section class="panel" id="panel-rev">
+      <div class="panel-head"><h2>月營收</h2><div class="legend" id="legend-rev"></div></div>
+      <div class="chart chart-sm" id="chart-rev"></div>
+      <p class="note">長條為當月營收（億元），線為<span class="yoy">年增率 %</span>（左軸）。
+        月營收從開始每日抓取後逐月累積，滿 3 個月才會顯示圖表。</p>
+    </section>
+
+    <section class="grid">
+      <div class="panel" id="signals"></div>
+      <div class="panel" id="ex-rights"></div>
+    </section>
+  </main>
+
+  <footer class="wrap foot">
+    資料來源：臺灣證券交易所。技術訊號以還原權息收盤價計算，條件與收盤報告相同。
+    本頁僅為資料整理，不構成任何投資建議。<br>
+    圖表使用 <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a> 的 Lightweight Charts™。
+  </footer>
+
+  <script src="common.js"></script>
+  <script src="stock.js"></script>
+</body>
+</html>

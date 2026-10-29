@@ -13,6 +13,12 @@
   --ma60: #a855f7;
   --foreign: #0ea5e9;
   --trust: #f97316;
+  --financing: #3b82f6;
+  --short: #f97316;
+  --pe: #a855f7;
+  --dy: #0ea5e9;
+  --pb: #f5a623;
+  --yoy: #f97316;
   --radius: 12px;
   color-scheme: light;
 }
@@ -67,6 +73,15 @@ body {
 h1 { font-size: 20px; margin: 0; }
 .sub { margin: 0; color: var(--muted); font-size: 13px; }
 
+.search {
+  font: inherit; color: var(--text); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 8px; height: 36px; padding: 0 10px;
+  flex: 1; min-width: 160px; max-width: 280px; margin-left: auto;
+}
+.links { display: flex; gap: 14px; font-size: 14px; }
+.links a { color: var(--accent); text-decoration: none; }
+.links a:hover { text-decoration: underline; }
+
 .picker { display: flex; gap: 6px; align-items: center; }
 .picker select, .picker button, .ranges button, .tabs button {
   font: inherit; color: var(--text); background: var(--panel);
@@ -98,6 +113,8 @@ h3 { font-size: 15px; margin: 0 0 8px; }
 .note { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
 .ma5 { color: var(--ma5); } .ma20 { color: var(--ma20); } .ma60 { color: var(--ma60); }
 .foreign { color: var(--foreign); } .trust { color: var(--trust); }
+.financing { color: var(--financing); } .short { color: var(--short); }
+.yoy { color: var(--yoy); }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
 
@@ -107,6 +124,9 @@ td { padding: 5px 6px; text-align: right; border-bottom: 1px solid var(--grid); 
 th:nth-child(-n+2), td:nth-child(-n+2) { text-align: left; }
 td.name { max-width: 9em; overflow: hidden; text-overflow: ellipsis; }
 .table-scroll { overflow-x: auto; }
+/* 表格裡的股票、日期可以點：平常淡淡的底線，滑過時變色 */
+td a { color: inherit; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+td a:hover { color: var(--accent); text-decoration-color: currentColor; }
 .empty { color: var(--muted); font-size: 14px; padding: 8px 0; }
 
 .nowrap { white-space: nowrap; }
@@ -122,5 +142,6 @@ td.name { max-width: 9em; overflow: hidden; text-overflow: ellipsis; }
   .chart { height: 320px; }
   .grid { grid-template-columns: 1fr; }
   .picker { width: 100%; }
+  .search { max-width: none; margin-left: 0; }
   .picker select { flex: 1; min-width: 0; }
 }

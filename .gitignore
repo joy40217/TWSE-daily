@@ -2,3 +2,5 @@
 __pycache__/
 .venv/
 site/data/index.json
+site/data/stocks/
+site/data/stocks.json

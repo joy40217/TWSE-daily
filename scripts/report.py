@@ -9,7 +9,8 @@
   2. 為還沒有報告、或當時資料不齊（融資融券、三大法人晚公布）的交易日
      產生 site/data/days/<年>/<日期>.json（會 commit 進 repo）
   3. 重新產生 site/data/index.json（每個交易日的大盤摘要，給網頁圖表用；每次重建，不進 git）
-  4. 最新交易日的報告若是這次新產生的，在 GitHub Actions 輸出 new_day=<日期>，
+  4. 重新產生個股頁面資料 site/data/stocks/（見 stock_data.py；每次重建，不進 git）
+  5. 最新交易日的報告若是這次新產生的，在 GitHub Actions 輸出 new_day=<日期>，
      workflow 會在網頁發布後再送 Discord，避免通知先到、網頁還沒更新
 
 法人買賣超金額 = 買賣超股數 × 當日收盤價，是估算值。
@@ -26,6 +27,7 @@ from pathlib import Path
 import requests
 
 import build_db
+import stock_data
 
 ROOT = build_db.ROOT
 SITE = ROOT / "site"
@@ -35,6 +37,7 @@ SIGNAL_TOP = 20          # 每種技術訊號最多列幾檔
 SIGNAL_MIN_VALUE = 1e8   # 當日成交金額低於 1 億的股票不列入技術訊號，避免冷門股雜訊
 YI = 1e8                 # 億
 num = build_db.num
+first = stock_data.first
 
 
 def is_stock(code: str) -> bool:
@@ -52,15 +55,6 @@ def query(con, sql, *args):
         return [dict(r) for r in con.execute(sql, args)]
     finally:
         con.row_factory = None
-
-
-def first(row, *names):
-    """依序找第一個有值的欄位（不同年份的欄位名稱不同）"""
-    for n in names:
-        v = num(row.get(n))
-        if v is not None:
-            return v
-    return None
 
 
 # ---- 技術訊號：依股票、日期依序掃過一次還原日 K ----
@@ -356,6 +350,7 @@ def main() -> int:
         out = DAYS_DIR / day[:4] / f"{day}.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(report, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    print(f"已產生 {stock_data.build(con, have)} 檔個股資料（site/data/stocks/）")
     con.close()
 
     # 給網頁圖表用的每日摘要
