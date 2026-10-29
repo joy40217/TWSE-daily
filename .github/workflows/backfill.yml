@@ -1,0 +1,58 @@
+name: 回補歷史資料
+
+on:
+  workflow_dispatch:   # 只能手動執行
+    inputs:
+      start:
+        description: "開始日期，例如 2025-01-01"
+        required: true
+      end:
+        description: "結束日期（留空 = 昨天）"
+        required: false
+      only:
+        description: "只補部分資料集，逗號分隔，例如 stock_day_all,taiex（留空 = 全部）"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350   # GitHub 上限 6 小時，一年約 40 分鐘，一次別補太多年
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests
+
+      - name: 回補資料
+        env:
+          START: ${{ inputs.start }}
+          END: ${{ inputs.end }}
+          ONLY: ${{ inputs.only }}
+        run: |
+          args=("$START")
+          if [ -n "$END" ]; then args+=("$END"); fi
+          if [ -n "$ONLY" ]; then args+=(--only "$ONLY"); fi
+          python scripts/backfill.py "${args[@]}"
+
+      - name: 提交資料
+        if: always()   # 中途失敗或逾時，已補好的部分也照樣存
+        env:
+          START: ${{ inputs.start }}
+          END: ${{ inputs.end }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          if git diff --cached --quiet; then
+            echo "沒有新資料"
+          else
+            git commit -m "data: backfill ${START} ~ ${END:-昨天}"
+            git pull --rebase   # 回補期間每日 workflow 可能已推了新資料
+            git push
+          fi
