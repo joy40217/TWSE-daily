@@ -1,0 +1,15 @@
+name: 檢查證交所網站端點
+
+on:
+  workflow_dispatch: {}   # 只能手動執行
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python scripts/check_rwd.py
