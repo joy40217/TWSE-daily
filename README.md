@@ -27,22 +27,53 @@
 
 1. 在 GitHub 建立 repo，把這些檔案推上去
 2. 到 Settings → Actions → General → Workflow permissions，選 **Read and write permissions**
-3. 到 Actions 分頁手動執行一次「每日抓取證交所資料」，確認正常
+3. 到 Settings → Pages → Build and deployment → Source，選 **GitHub Actions**（收盤後報告網頁用）
+4. （選用）到 Settings → Secrets and variables → Actions 新增 `DISCORD_WEBHOOK_URL`，
+   值為 Discord 頻道的 Webhook 網址（頻道設定 → 整合 → Webhook → 新 Webhook → 複製網址）
+5. 到 Actions 分頁手動執行一次「每日抓取證交所資料」，確認正常
 
 ## 使用方式
 
 ### 每日自動抓取
 
-不需要手動操作。每個平日台灣時間 18:00，「每日抓取證交所資料」workflow 會執行
-`scripts/fetch.py` 並 commit 新資料。
+不需要手動操作。「每日抓取證交所資料」workflow 每個平日執行兩次：
 
-每次執行會檢查最近 5 個交易日，缺的就補。融資融券約晚上才公布，傍晚抓不到是正常的，
-隔天執行時會自動補上；某天 workflow 沒跑成功也一樣。
+| 台灣時間 | 做什麼 |
+|---|---|
+| 18:00 | 抓行情、本益比、三大法人等收盤資料 |
+| 22:00 | 再抓一次（補上晚間公布的融資融券），產生收盤後報告、發布網頁、送 Discord 通知 |
+
+GitHub 的排程常會延遲幾分鐘到半小時，屬正常現象。
+每次執行會檢查最近 5 個交易日，缺的就補；某天沒抓到的資料（例如融資融券較晚公布），
+下次執行時會自動補上。
 
 在本機手動執行：
 
     pip install requests
     python scripts/fetch.py
+
+### 收盤後報告
+
+網址：`https://<GitHub 帳號>.github.io/<repo 名稱>/`，網址後面加 `#2026-10-29` 可直接開某一天。
+
+- 加權指數 K 線（含 MA5 / MA20 / MA60 與成交金額）、三大法人買賣超走勢，可縮放、拖曳，點 K 棒切換日期
+- 當日摘要：漲跌家數、成交金額、三大法人、融資融券增減
+- 排行：漲跌幅、成交金額、外資 / 投信買賣超、融資增減
+- 技術訊號：創 60 日新高、MA5 與 MA20 黃金 / 死亡交叉、爆量（以還原權息價格計算）
+- 當日除權息股票
+
+有設定 `DISCORD_WEBHOOK_URL` 的話，每天產生新報告時會送一則摘要和大盤 K 線圖到 Discord，附上網頁連結。
+
+> **注意**：GitHub Pages 網站是公開的，就算 repo 設為私有也一樣，任何知道網址的人都看得到。
+> 報告內容只有證交所的公開資料，但不要把個人持股之類的資訊放進報告。
+
+每天的報告存在 `site/data/days/<年>/<日期>.json`；回補歷史資料後，下次產生報告時會自動補上那些日子的報告。
+在本機產生與預覽：
+
+    pip install requests matplotlib
+    python scripts/report.py                          # 產生報告資料
+    python -m http.server --directory site            # 開 http://localhost:8000 預覽
+    python scripts/report.py --notify 2026-10-29      # 送 Discord（需設定環境變數 DISCORD_WEBHOOK_URL）
 
 ### 回補歷史資料
 

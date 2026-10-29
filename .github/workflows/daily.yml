@@ -2,12 +2,24 @@ name: 每日抓取證交所資料
 
 on:
   schedule:
-    # GitHub 用 UTC 時間；10:00 UTC = 台灣 18:00，週一到週五
-    - cron: "0 10 * * 1-5"
-  workflow_dispatch: {}   # 可在 Actions 頁面手動執行
+    # GitHub 用 UTC 時間（台灣 = UTC+8），週一到週五；GitHub 排程常會延遲幾分鐘到半小時
+    - cron: "0 10 * * 1-5"    # 台灣 18:00：抓行情、本益比、三大法人等收盤資料
+    - cron: "0 14 * * 1-5"    # 台灣 22:00：融資融券公布後再抓一次，產生報告並發布網頁
+  workflow_dispatch:
+    inputs:
+      report:
+        description: "抓完資料後產生報告並發布網頁"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: daily   # 同一時間只跑一個，避免兩次執行同時 push
+  cancel-in-progress: false
 
 jobs:
   fetch:
@@ -34,5 +46,68 @@ jobs:
             echo "沒有新資料"
           else
             git commit -m "data: $(TZ=Asia/Taipei date +%F)"
+            git pull --rebase   # 回補 workflow 可能同時推了資料
             git push
           fi
+
+  report:
+    needs: fetch
+    # 只有晚間那次排程、或手動執行且勾選「產生報告」時才跑；抓資料部分失敗也照樣產生報告
+    # 注意：這裡的排程字串要跟上方 schedule 的晚間那行完全相同，改時間時兩處都要改
+    if: ${{ !cancelled() && (github.event.schedule == '0 14 * * 1-5' || (github.event_name == 'workflow_dispatch' && inputs.report)) }}
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main   # 拿到 fetch 剛 commit 的資料
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests
+
+      - name: 產生報告
+        id: build
+        run: python scripts/report.py
+
+      - name: 提交報告資料
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add site/data/days
+          if git diff --cached --quiet; then
+            echo "沒有新報告"
+          else
+            git commit -m "report: $(TZ=Asia/Taipei date +%F)"
+            git pull --rebase
+            git push
+          fi
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: 發布網頁
+        id: deploy
+        uses: actions/deploy-pages@v4
+
+      # 網頁發布後才送通知，點連結時一定看得到新報告
+      - name: 安裝中文字型（圖表用）
+        if: steps.build.outputs.new_day != ''
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q fonts-noto-cjk
+          pip install matplotlib
+
+      - name: 送出 Discord 通知
+        if: steps.build.outputs.new_day != ''
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          REPORT_URL: ${{ steps.deploy.outputs.page_url }}
+        run: python scripts/report.py --notify ${{ steps.build.outputs.new_day }}

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>台股收盤報告</title>
+  <meta name="description" content="每日由臺灣證交所資料自動產生的收盤後報告">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='6' y='10' width='6' height='14' fill='%23e5484d'/><rect x='8.5' y='5' width='1' height='24' fill='%23e5484d'/><rect x='20' y='8' width='6' height='10' fill='%2330a46c'/><rect x='22.5' y='4' width='1' height='18' fill='%2330a46c'/></svg>">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap top-inner">
+      <div>
+        <h1>台股收盤報告</h1>
+        <p class="sub" id="subtitle">載入中…</p>
+      </div>
+      <nav class="picker" aria-label="選擇日期">
+        <button id="prev" type="button" aria-label="前一個交易日">‹</button>
+        <select id="date" aria-label="交易日"></select>
+        <button id="next" type="button" aria-label="下一個交易日">›</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="cards" id="cards" aria-label="大盤摘要"></section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>加權指數</h2>
+        <div class="legend" id="legend"></div>
+        <div class="ranges" role="group" aria-label="顯示範圍">
+          <button type="button" data-range="63">3 月</button>
+          <button type="button" data-range="126" class="on">6 月</button>
+          <button type="button" data-range="250">1 年</button>
+          <button type="button" data-range="0">全部</button>
+        </div>
+      </div>
+      <div class="chart" id="chart-taiex"></div>
+      <p class="note">點圖表上的 K 棒可切換到該交易日。均線：<span class="ma5">MA5</span>　<span class="ma20">MA20</span>　<span class="ma60">MA60</span>；下方為成交金額。</p>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>三大法人買賣超</h2>
+        <div class="legend" id="legend-inst"></div>
+      </div>
+      <div class="chart chart-sm" id="chart-inst"></div>
+      <p class="note">長條為三大法人合計，線為<span class="foreign">外資</span>、<span class="trust">投信</span>。單位：億元，以買賣超股數 × 收盤價估算。</p>
+    </section>
+
+    <section class="grid" id="lists"></section>
+
+    <section class="panel" id="signals"></section>
+
+    <section class="panel" id="ex-rights"></section>
+  </main>
+
+  <footer class="wrap foot">
+    資料來源：臺灣證券交易所。法人金額為估算值，技術訊號以還原權息收盤價計算、排除當日成交金額未滿 1 億的股票。
+    本頁僅為資料整理，不構成任何投資建議。<br>
+    圖表使用 <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a> 的 Lightweight Charts™。
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
