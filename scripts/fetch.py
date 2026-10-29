@@ -75,7 +75,10 @@ def parse_month(s):
     return f"{y}-{mo:02d}" if 1 <= mo <= 12 else None
 
 
-def get_json(url: str, retries: int = 3):
+RETRY_WAITS = (15, 45)   # 失敗後等幾秒再試；證交所偶爾會回空白或錯誤頁，通常稍等就恢復
+
+
+def get_json(url: str, retries: int = len(RETRY_WAITS) + 1):
     headers = {"User-Agent": "Mozilla/5.0 (twse-daily-archiver)", "Accept": "application/json"}
     verify = True
     for attempt in range(1, retries + 1):
@@ -83,14 +86,21 @@ def get_json(url: str, retries: int = 3):
             r = requests.get(url, headers=headers, timeout=60, verify=verify)
             r.raise_for_status()
             r.encoding = "utf-8"
-            return r.json()
+            try:
+                return r.json()
+            except ValueError:
+                # 不是 JSON：記下狀態碼與內容開頭，方便判斷是被封鎖、維護中還是空白回應
+                title = re.search(r"<title[^>]*>(.*?)</title>", r.text, re.S | re.I)
+                body = " ".join((title.group(1) if title else r.text).split())[:80] or "（空白）"
+                raise ValueError(f"回應不是 JSON（HTTP {r.status_code}，{r.headers.get('Content-Type', '?')}）：{body}")
         except requests.exceptions.SSLError:
             print("  SSL 驗證失敗，改為略過憑證驗證重試")
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
             verify = False
         except Exception as e:  # noqa: BLE001
             print(f"  第 {attempt} 次失敗：{e}")
-            time.sleep(5 * attempt)
+            if attempt < retries:
+                time.sleep(RETRY_WAITS[min(attempt, len(RETRY_WAITS)) - 1])
     raise RuntimeError(f"無法取得 {url}")
 
 
