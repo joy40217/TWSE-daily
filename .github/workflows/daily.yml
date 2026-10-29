@@ -1,0 +1,38 @@
+name: 每日抓取證交所資料
+
+on:
+  schedule:
+    # GitHub 用 UTC 時間；10:00 UTC = 台灣 18:00，週一到週五
+    - cron: "0 10 * * 1-5"
+  workflow_dispatch: {}   # 可在 Actions 頁面手動執行
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests
+
+      - name: 抓取資料
+        run: python scripts/fetch.py
+
+      - name: 提交新資料
+        if: always()   # 就算部分資料集失敗，成功的部分也照樣存
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          if git diff --cached --quiet; then
+            echo "沒有新資料"
+          else
+            git commit -m "data: $(TZ=Asia/Taipei date +%F)"
+            git push
+          fi
