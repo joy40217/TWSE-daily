@@ -1,9 +1,15 @@
 """每天抓取證交所資料，存成 data/<資料集>/<年>/<日期>.csv
 
-三種存檔模式：
-  daily    依資料內的日期逐日拆檔（一次回傳多天的也會自動拆開）
-  monthly  依「資料年月」存檔
-  snapshot 只保留最新一份（git 只在內容有變時才會 commit）
+資料來源：
+  證交所網站歷史查詢（rwd）：可指定日期，收盤後當天就查得到
+    → 個股行情、本益比、融資融券、三大法人、加權指數、除權息
+  OpenAPI：只有最新一份，而且每日行情要到隔天才更新，只用在沒有日期問題的資料
+    → 月營收、休市日程
+
+網站資料一律轉成跟 OpenAPI 相同的欄位格式，新舊檔案可以混用。
+每次執行會檢查最近 LOOKBACK 個交易日，缺的就補；
+例如融資融券晚上才公布，傍晚執行時查不到，隔天執行會自動補上。
+backfill.py 也是用這裡的函式回補歷史資料。
 """
 import csv
 import datetime as dt
@@ -21,24 +27,8 @@ RWD = "https://www.twse.com.tw/rwd/zh"
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 TW_TZ = dt.timezone(dt.timedelta(hours=8))
 TODAY = dt.datetime.now(TW_TZ).date()
-
-
-def twt49u_url():
-    """除權除息計算結果：查最近 14 天，晚公布或補登的資料也抓得到"""
-    start = (TODAY - dt.timedelta(days=14)).strftime("%Y%m%d")
-    return f"{RWD}/exRight/TWT49U?startDate={start}&endDate={TODAY:%Y%m%d}&response=json"
-
-
-# 順序有意義：stock_day_all 放第一個，它的日期會當作其他無日期欄位資料的「交易日」
-DATASETS = {
-    "stock_day_all":    {"url": OPENAPI + "/exchangeReport/STOCK_DAY_ALL", "mode": "daily"},     # 個股日成交（K 線本體）
-    "bwibbu_all":       {"url": OPENAPI + "/exchangeReport/BWIBBU_ALL",    "mode": "daily"},     # 本益比/殖利率/淨值比
-    "margin":           {"url": OPENAPI + "/exchangeReport/MI_MARGN",      "mode": "daily"},     # 融資融券
-    "taiex":            {"url": OPENAPI + "/indicesReport/MI_5MINS_HIST",  "mode": "daily"},     # 加權指數日 K（回傳當月全部）
-    "ex_rights":        {"url": twt49u_url, "mode": "daily", "rwd": True, "allow_empty": True},  # 除權除息計算結果
-    "monthly_revenue":  {"url": OPENAPI + "/opendata/t187ap05_L",          "mode": "monthly"},   # 月營收
-    "holiday_schedule": {"url": OPENAPI + "/holidaySchedule/holidaySchedule", "mode": "snapshot"},  # 休市日程
-}
+PAUSE = 3      # 每次查詢網站的間隔秒數，查詢太密集會被暫時封鎖
+LOOKBACK = 5   # 每次檢查最近幾個交易日有沒有缺資料
 
 DAY_KEYS = ["Date", "日期", "資料日期", "出表日期"]
 MONTH_KEYS = ["資料年月"]
@@ -151,51 +141,238 @@ def group_rows(rows, keys, parser, fallback):
     return groups
 
 
-def process(name, cfg, ref_date):
-    url = cfg["url"]() if callable(cfg["url"]) else cfg["url"]
-    js = get_json(url)
-    rows = rwd_rows(js) if cfg.get("rwd") else js
-    if not isinstance(rows, list):
-        raise RuntimeError("回傳格式不是清單")
-    if not rows:
-        if cfg.get("allow_empty"):
-            print("  這段期間沒有資料")
-            return None
-        raise RuntimeError("回傳資料為空")
+def out_path(name: str, key: str) -> Path:
+    return DATA_DIR / name / key[:4] / f"{key}.csv"
 
-    mode = cfg["mode"]
-    if mode == "snapshot":
+
+def save(name: str, key: str, rows) -> None:
+    out = out_path(name, key)
+    if write_csv(out, rows):
+        print(f"  已寫入 {out.relative_to(DATA_DIR)}（{len(rows)} 筆）")
+    else:
+        print(f"  {out.relative_to(DATA_DIR)} 已存在，略過")
+
+
+# ---- 證交所網站（rwd）依日期查詢，轉成 OpenAPI 格式 ----
+
+def num(s) -> str:
+    """'2,425.00' -> '2425.00'；'--'、'-' 等無資料 -> ''"""
+    s = str(s).strip()
+    return "" if s in ("", "-", "--", "---") else s.replace(",", "")
+
+
+def count(s) -> str:
+    """數量為 0 時 OpenAPI 給空白，這裡比照辦理"""
+    n = num(s)
+    return "" if n == "0" else n
+
+
+def ratio(s) -> str:
+    """比率為 0（如 '0.00'）時 OpenAPI 給空白，這裡比照辦理"""
+    n = num(s)
+    return n if n and float(n) != 0 else ""
+
+
+def roc(day: dt.date) -> str:
+    return f"{day.year - 1911}{day:%m%d}"
+
+
+def query(path: str, **params):
+    """查詢 rwd 端點；沒有資料（假日、尚未公布）時回傳 None"""
+    qs = "&".join(f"{k}={v}" for k, v in params.items())
+    js = get_json(f"{RWD}/{path}?{qs}&response=json")
+    time.sleep(PAUSE)
+    return js if js.get("stat") == "OK" else None
+
+
+def table(js, first_field: str):
+    """從回應中找出第一個欄位是 first_field 的表，回傳 (欄位, 資料)"""
+    for t in [js] + list(js.get("tables") or []):
+        if (t.get("fields") or [None])[0] == first_field:
+            return t["fields"], t.get("data") or []
+    raise RuntimeError(f"找不到第一欄為「{first_field}」的資料表，格式可能改了")
+
+
+def stock_day_all(day: dt.date):
+    """MI_INDEX 每日收盤行情 -> OpenAPI STOCK_DAY_ALL 格式"""
+    js = query("afterTrading/MI_INDEX", date=f"{day:%Y%m%d}", type="ALLBUT0999")
+    if js is None:
+        return []
+    fields, data = table(js, "證券代號")
+    rows = []
+    for r in data:
+        f = dict(zip(fields, r))
+        sign = "-" if "-" in f["漲跌(+/-)"] else ""
+        rows.append({
+            "Date": roc(day),
+            "Code": f["證券代號"].strip(),
+            "Name": f["證券名稱"].strip(),
+            "TradeVolume": count(f["成交股數"]),
+            "TradeValue": count(f["成交金額"]),
+            "OpeningPrice": num(f["開盤價"]),
+            "HighestPrice": num(f["最高價"]),
+            "LowestPrice": num(f["最低價"]),
+            "ClosingPrice": num(f["收盤價"]),
+            "Change": f"{sign}{float(num(f['漲跌價差']) or 0):.4f}",
+            "Transaction": count(f["成交筆數"]),
+        })
+    return rows
+
+
+def bwibbu_all(day: dt.date):
+    """BWIBBU_d 本益比、殖利率及股價淨值比 -> OpenAPI BWIBBU_ALL 格式（舊年份欄位較少，依名稱對應）"""
+    js = query("afterTrading/BWIBBU_d", date=f"{day:%Y%m%d}", selectType="ALL")
+    if js is None:
+        return []
+    fields, data = table(js, "證券代號")
+    rows = []
+    for r in data:
+        f = dict(zip(fields, r))
+        rows.append({
+            "Date": roc(day),
+            "Code": f["證券代號"].strip(),
+            "Name": f["證券名稱"].strip(),
+            "PEratio": ratio(f["本益比"]),
+            "DividendYield": ratio(f["殖利率(%)"]),
+            "PBratio": ratio(f["股價淨值比"]),
+        })
+    return rows
+
+
+MARGIN_COLS = ["股票代號", "股票名稱",
+               "融資買進", "融資賣出", "融資現金償還", "融資前日餘額", "融資今日餘額", "融資限額",
+               "融券買進", "融券賣出", "融券現券償還", "融券前日餘額", "融券今日餘額", "融券限額",
+               "資券互抵", "註記"]
+
+
+def margin(day: dt.date):
+    """MI_MARGN 融資融券彙總 -> OpenAPI MI_MARGN 格式（融資、融券欄位同名，只能依位置對應）"""
+    js = query("marginTrading/MI_MARGN", date=f"{day:%Y%m%d}", selectType="ALL")
+    if js is None:
+        return []
+    fields, data = table(js, "代號")
+    if len(fields) != len(MARGIN_COLS):
+        raise RuntimeError(f"融資融券欄位數變了（{len(fields)} 欄）：{fields}")
+    rows = []
+    for r in data:
+        row = dict(zip(MARGIN_COLS, r))
+        for k in MARGIN_COLS[2:-1]:
+            row[k] = count(row[k])
+        row["股票代號"], row["股票名稱"] = row["股票代號"].strip(), row["股票名稱"].strip()
+        rows.append(row)
+    return rows
+
+
+def institutional(day: dt.date):
+    """T86 三大法人買賣超（不含權證）；OpenAPI 沒有對應資料，保留網站欄位名稱、數字去掉千分位"""
+    js = query("fund/T86", date=f"{day:%Y%m%d}", selectType="ALLBUT0999")
+    if js is None:
+        return []
+    fields, data = table(js, "證券代號")
+    return [{f: (v.strip() if i < 2 else num(v)) for i, (f, v) in enumerate(zip(fields, r))}
+            for r in data]
+
+
+def taiex(day: dt.date):
+    """MI_5MINS_HIST 加權指數（day 所在月份）-> {'2026-10-01': [row], ...}，OpenAPI 格式"""
+    js = query("TAIEX/MI_5MINS_HIST", date=f"{day:%Y%m%d}")
+    if js is None:
+        return {}
+    fields, data = table(js, "日期")
+    out = {}
+    for r in data:
+        f = dict(zip(fields, r))
+        d = parse_date(f["日期"])
+        out[d.isoformat()] = [{
+            "Date": roc(d),
+            "OpeningIndex": num(f["開盤指數"]),
+            "HighestIndex": num(f["最高指數"]),
+            "LowestIndex": num(f["最低指數"]),
+            "ClosingIndex": num(f["收盤指數"]),
+        }]
+    return out
+
+
+def ex_rights(start: dt.date, end: dt.date):
+    """TWT49U 除權除息計算結果 -> {'2026-10-16': [...], ...}"""
+    js = query("exRight/TWT49U", startDate=f"{start:%Y%m%d}", endDate=f"{end:%Y%m%d}")
+    rows = rwd_rows(js) if js else []
+    return group_rows(rows, DAY_KEYS, parse_date, None) if rows else {}
+
+
+# 順序有意義：taiex 放第一個，它的日期就是交易日清單，其他逐日資料依此判斷要查哪幾天
+DATASETS = {
+    "taiex":            {"by_month": taiex},          # 加權指數日 K
+    "stock_day_all":    {"by_day": stock_day_all},    # 個股日成交（K 線本體）
+    "bwibbu_all":       {"by_day": bwibbu_all},       # 本益比/殖利率/淨值比
+    "margin":           {"by_day": margin},           # 融資融券（晚上才公布，多半隔天補上）
+    "institutional":    {"by_day": institutional},    # 三大法人買賣超
+    "ex_rights":        {"by_range": ex_rights},      # 除權除息計算結果（查最近 14 天，晚公布的也抓得到）
+    "monthly_revenue":  {"url": OPENAPI + "/opendata/t187ap05_L", "mode": "monthly"},               # 月營收
+    "holiday_schedule": {"url": OPENAPI + "/holidaySchedule/holidaySchedule", "mode": "snapshot"},  # 休市日程
+}
+
+
+def recent_trading_days():
+    """最近 LOOKBACK 個交易日（以已存的加權指數檔案為準）"""
+    days = sorted(p.stem for p in (DATA_DIR / "taiex").glob("*/*.csv"))
+    return days[-LOOKBACK:]
+
+
+def fetch_by_day(name, fn):
+    for key in recent_trading_days():
+        if out_path(name, key).exists():
+            continue
+        rows = fn(dt.date.fromisoformat(key))
+        if rows:
+            save(name, key, rows)
+        else:
+            print(f"  {key} 尚未公布，下次執行再補")
+
+
+def fetch_openapi(name, cfg):
+    rows = get_json(cfg["url"])
+    if not isinstance(rows, list) or not rows:
+        raise RuntimeError("回傳資料為空或格式不是清單")
+    if cfg["mode"] == "snapshot":
         out = DATA_DIR / name / f"{name}.csv"
         write_csv(out, rows, overwrite=True)
         print(f"  已更新 {out.relative_to(DATA_DIR)}（{len(rows)} 筆）")
-        return None
-
-    if mode == "daily":
-        groups = group_rows(rows, DAY_KEYS, parse_date, ref_date)
+        return
+    if cfg["mode"] == "daily":
+        groups = group_rows(rows, DAY_KEYS, parse_date, None)
     else:
         groups = group_rows(rows, MONTH_KEYS, parse_month, None)
-
     for key in sorted(groups):
-        out = DATA_DIR / name / key[:4] / f"{key}.csv"
-        if write_csv(out, groups[key]):
-            print(f"  已寫入 {out.relative_to(DATA_DIR)}（{len(groups[key])} 筆）")
-        else:
-            print(f"  {out.relative_to(DATA_DIR)} 已存在，略過")
-    return max(groups) if groups else None
+        save(name, key, groups[key])
 
 
 def main() -> int:
-    failed, ref_date = [], None
+    failed = []
     for name, cfg in DATASETS.items():
         print(f"[{name}]")
         try:
-            latest = process(name, cfg, ref_date)
-            if name == "stock_day_all":
-                ref_date = latest
+            if "by_day" in cfg:
+                fetch_by_day(name, cfg["by_day"])
+            elif "by_month" in cfg:
+                # 月初時連上個月一起查，避免月底的交易日漏掉
+                months = {f"{d:%Y-%m}": d for d in (TODAY - dt.timedelta(days=10), TODAY)}
+                for day in sorted(months.values()):
+                    for key, rows in sorted(cfg["by_month"](day).items()):
+                        if not out_path(name, key).exists():
+                            save(name, key, rows)
+            elif "by_range" in cfg:
+                groups = cfg["by_range"](TODAY - dt.timedelta(days=14), TODAY)
+                if not groups:
+                    print("  這段期間沒有資料")
+                for key in sorted(groups):
+                    save(name, key, groups[key])
+            else:
+                fetch_openapi(name, cfg)
+                time.sleep(1)
         except Exception as e:  # noqa: BLE001
             print(f"  失敗：{e}")
             failed.append(name)
-        time.sleep(3 if cfg.get("rwd") else 1)  # 證交所網站對頻繁請求較敏感
     if failed:
         print("以下資料集失敗：", ", ".join(failed))
         return 1
