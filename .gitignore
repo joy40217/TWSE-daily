@@ -4,3 +4,5 @@ __pycache__/
 site/data/index.json
 site/data/stocks/
 site/data/stocks.json
+site/data/summary/
+site/data/latest.json

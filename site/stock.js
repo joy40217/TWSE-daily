@@ -5,6 +5,7 @@ const SIGNAL_MIN_VALUE = 100;   // 技術訊號只看成交金額 ≥ 1 億的�
 const SIGNAL_ROWS = 30;         // 技術訊號表列最近幾筆
 
 let S = null;          // 個股資料
+let brief = null;      // 個股摘要 data/summary/<代號>.json（連買連賣天數、注意處置、除權息預告），載入失敗就不顯示
 let factor = [];       // 每天的還原權息因子
 let adjust = true;
 let range = 250;
@@ -391,7 +392,7 @@ function showLegends(i) {
       (S.ms[i] && S.mf[i] ? `　券資比 ${nf((S.ms[i] / S.mf[i]) * 100, 1)}%` : "");
   }
   if (!$("panel-value").hidden) {
-    $("legend-value").innerHTML = `${d}　本益比 ${nf(S.pe[i], 2)}　殖利率 ${nf(S.dy[i], 2)}%　淨值比 ${nf(S.pb[i], 2)}`;
+    $("legend-value").innerHTML = `${d}　本益比 ${nf(S.pe[i], 2)}　殖利率 ${S.dy[i] == null ? "—" : nf(S.dy[i], 2) + "%"}　淨值比 ${nf(S.pb[i], 2)}`;
   }
 }
 
@@ -404,6 +405,32 @@ function card(label, value, detail = "", cls = "") {
   return `<div class="card"><div class="label">${label}</div><div class="value ${cls}">${value}</div><div class="detail">${detail}</div></div>`;
 }
 
+// 外資、投信連續買超或賣超天數（2 天以上才顯示）
+function streakText() {
+  const st = brief?.streak;
+  if (!st) return "";
+  const parts = [["外資", st.foreign], ["投信", st.trust]].filter(([, n]) => Math.abs(n) >= 2)
+    .map(([k, n]) => `<span class="nowrap ${tone(n)}">${k}連${n > 0 ? "買" : "賣"} ${Math.abs(n)} 天</span>`);
+  return parts.length ? `<br>${parts.join("　")}` : "";
+}
+
+// 標題下方的提醒：處置中、近 5 日被列注意股、即將除權息
+function renderBadges() {
+  if (!brief) return;
+  const out = [];
+  if (brief.disposition) out.push(`<span class="badge alert" title="${esc(brief.disposition.condition)}">處置中 ${esc(brief.disposition.period)}</span>`);
+  if (brief.notice?.length) {
+    const last = brief.notice[brief.notice.length - 1];
+    out.push(`<span class="badge warn" title="${esc(last.info)}">注意股 ${last.date.slice(5)}（近 5 日 ${brief.notice.length} 次）</span>`);
+  }
+  for (const x of brief.ex_rights_upcoming || []) {
+    const cash = typeof x.cash_dividend === "number" ? ` 現金 ${nf(x.cash_dividend, 2)}` : "";
+    out.push(`<span class="badge info">除${esc(x.type)} ${x.date.slice(5)}${cash}</span>`);
+  }
+  $("badges").innerHTML = out.join("");
+  $("badges").hidden = !out.length;
+}
+
 function renderCards() {
   const i = S.d.length - 1;
   const { chg, pct } = change(i);
@@ -412,13 +439,14 @@ function renderCards() {
     card("成交量", `${nf(S.v[i])} 張`, `金額 ${nf(S.val[i] / 100, 2)} 億`),
   ];
   if (has("pe") || has("dy") || has("pb")) {
-    out.push(card("本益比", nf(S.pe[i], 2), `殖利率 ${nf(S.dy[i], 2)}%　淨值比 ${nf(S.pb[i], 2)}`));
+    out.push(card("本益比", nf(S.pe[i], 2), `殖利率 ${S.dy[i] == null ? "—" : nf(S.dy[i], 2) + "%"}　淨值比 ${nf(S.pb[i], 2)}`));
   }
   if (has("fi")) {
     const total = S.fi[i] == null ? null : S.fi[i] + (S.tr[i] ?? 0) + (S.dl[i] ?? 0);
     out.push(total == null ? card("三大法人", "尚未公布") : card("三大法人（張）", signed(total),
       [["外資", S.fi[i]], ["投信", S.tr[i]], ["自營", S.dl[i]]]
-        .map(([k, v]) => `<span class="nowrap">${k} <span class="${tone(v)}">${signed(v)}</span></span>`).join("　"),
+        .map(([k, v]) => `<span class="nowrap">${k} <span class="${tone(v)}">${signed(v)}</span></span>`).join("　") +
+        streakText(),
       tone(total)));
   }
   if (has("mf")) {
@@ -463,7 +491,10 @@ async function init() {
     return;
   }
   try {
-    S = await getJSON(`data/stocks/${encodeURIComponent(code)}.json`);
+    [S, brief] = await Promise.all([
+      getJSON(`data/stocks/${encodeURIComponent(code)}.json`),
+      getJSON(`data/summary/${encodeURIComponent(code)}.json`).catch(() => null),
+    ]);
   } catch (e) {
     $("title").textContent = code;
     $("subtitle").textContent = `找不到 ${code} 的資料（只有上市股票與 ETF）`;
@@ -478,6 +509,7 @@ async function init() {
   $("back").href = `index.html#${S.d[S.d.length - 1]}`;
   $("yahoo").href = `https://tw.stock.yahoo.com/quote/${encodeURIComponent(S.code)}.TW`;
 
+  renderBadges();
   renderCards();
   buildCharts();
   requestAnimationFrame(focusRange);   // 等圖表取得實際寬度後再設定範圍

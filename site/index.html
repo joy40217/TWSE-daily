@@ -49,18 +49,26 @@
         <div class="legend" id="legend-inst"></div>
       </div>
       <div class="chart chart-sm" id="chart-inst"></div>
-      <p class="note">長條為三大法人合計，線為<span class="foreign">外資</span>、<span class="trust">投信</span>。單位：億元，以買賣超股數 × 收盤價估算。</p>
+      <p class="note">長條為三大法人合計，線為<span class="foreign">外資</span>、<span class="trust">投信</span>。單位：億元，取自證交所「三大法人買賣金額統計表」；還沒有這份資料的日子以買賣超股數 × 收盤價估算。</p>
     </section>
 
     <section class="grid" id="lists"></section>
 
+    <section class="grid">
+      <div class="panel" id="sectors"></div>
+      <div class="panel" id="flagged"></div>
+    </section>
+
     <section class="panel" id="signals"></section>
 
-    <section class="panel" id="ex-rights"></section>
+    <section class="grid">
+      <div class="panel" id="ex-rights"></div>
+      <div class="panel" id="ex-forecast"></div>
+    </section>
   </main>
 
   <footer class="wrap foot">
-    資料來源：臺灣證券交易所。法人金額為估算值，技術訊號以還原權息收盤價計算、排除當日成交金額未滿 1 億的股票。
+    資料來源：臺灣證券交易所。個股的法人買賣超金額為估算值，技術訊號以還原權息收盤價計算、排除當日成交金額未滿 1 億的股票。
     本頁僅為資料整理，不構成任何投資建議。<br>
     圖表使用 <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a> 的 Lightweight Charts™。
   </footer>

@@ -5,7 +5,7 @@
   python scripts/backfill.py 2026-01-01 2026-06-30                  # 指定區間
   python scripts/backfill.py 2026-01-01 --only stock_day_all,taiex  # 只補部分資料集
 
-可回補 fetch.py 裡所有網站來源的資料集（monthly_revenue、holiday_schedule 沒有歷史查詢）。
+可回補 fetch.py 裡所有網站來源的資料集（monthly_revenue、holiday_schedule、ex_rights_forecast 沒有歷史查詢）。
 抓取與轉換都用 fetch.py 的函式，回補的檔案跟每日抓的格式完全相同。
 已存在的檔案會略過，中斷後重跑會從缺的地方接著補。
 """
@@ -17,6 +17,7 @@ from fetch import DATASETS, TODAY, out_path, save
 
 MAX_FAILS = 5   # 連續失敗這麼多次就停下來（多半是被封鎖了），稍後重跑即可
 BY_DAY = {name: cfg["by_day"] for name, cfg in DATASETS.items() if "by_day" in cfg}
+EMPTY_OK = {name for name, cfg in DATASETS.items() if cfg.get("fields")}   # 注意股、處置股：當天沒有也是正常的
 SUPPORTED = ["taiex", "ex_rights"] + list(BY_DAY)
 
 
@@ -82,7 +83,7 @@ def main() -> int:
                 if out_path(name, key).exists():
                     continue
                 rows = attempt(f"{name} {key}", BY_DAY[name], dt.date.fromisoformat(key))
-                if rows:
+                if rows or (rows is not None and name in EMPTY_OK):
                     save(name, key, rows)
                 elif rows is not None:
                     print(f"  {name} {key} 沒有資料")

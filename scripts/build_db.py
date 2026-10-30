@@ -40,11 +40,15 @@ def load_tables(con):
         rows, cols = [], {}
         for f in files:
             with f.open(encoding="utf-8-sig", newline="") as fh:
-                for r in csv.DictReader(fh):
+                reader = csv.DictReader(fh)
+                cols.update(dict.fromkeys(reader.fieldnames or []))
+                for r in reader:
                     r["_key"] = f.stem
                     rows.append(r)
-                    cols.update(dict.fromkeys(r))
+        cols["_key"] = None
         cols = list(cols)
+        if cols == ["_key"]:
+            continue
         con.execute(f"CREATE TABLE {q(ds.name)} ({', '.join(q(c) + ' TEXT' for c in cols)})")
         con.executemany(
             f"INSERT INTO {q(ds.name)} VALUES ({', '.join('?' * len(cols))})",

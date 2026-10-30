@@ -2,7 +2,8 @@
 
 資料來源：
   證交所網站歷史查詢（rwd）：可指定日期，收盤後當天就查得到
-    → 個股行情、本益比、融資融券、三大法人、加權指數、除權息
+    → 個股行情、本益比、融資融券、三大法人（個股與金額）、加權指數、類股指數、除權息、
+      注意股、處置股、除權息預告
   OpenAPI：只有最新一份，而且每日行情要到隔天才更新，只用在沒有日期問題的資料
     → 月營收、休市日程
 
@@ -29,6 +30,7 @@ TW_TZ = dt.timezone(dt.timedelta(hours=8))
 TODAY = dt.datetime.now(TW_TZ).date()
 PAUSE = 3      # 每次查詢網站的間隔秒數，查詢太密集會被暫時封鎖
 LOOKBACK = 5   # 每次檢查最近幾個交易日有沒有缺資料
+REFRESH = 2    # 「沒有資料也正常」的資料集（注意股、處置股），最近幾個交易日每次都重新查
 
 DAY_KEYS = ["Date", "日期", "資料日期", "出表日期"]
 MONTH_KEYS = ["資料年月"]
@@ -91,7 +93,8 @@ def get_json(url: str, retries: int = len(RETRY_WAITS) + 1):
             except ValueError:
                 # 不是 JSON：記下狀態碼與內容開頭，方便判斷是被封鎖、維護中還是空白回應
                 title = re.search(r"<title[^>]*>(.*?)</title>", r.text, re.S | re.I)
-                body = " ".join((title.group(1) if title else r.text).split())[:80] or "（空白）"
+                text = title.group(1) if title else re.sub(r"<script.*?</script>|<[^>]+>", " ", r.text, flags=re.S | re.I)
+                body = " ".join(text.split())[:80] or "（空白）"
                 raise ValueError(f"回應不是 JSON（HTTP {r.status_code}，{r.headers.get('Content-Type', '?')}）：{body}")
         except requests.exceptions.SSLError:
             print("  SSL 驗證失敗，改為略過憑證驗證重試")
@@ -119,11 +122,12 @@ def rwd_rows(js):
     return [dict(zip(names, row)) for row in data or []]
 
 
-def write_csv(out: Path, rows, overwrite=False) -> bool:
+def write_csv(out: Path, rows, overwrite=False, fields=None) -> bool:
+    """fields 可指定欄位（沒有資料時也寫出標題列）"""
     if out.exists() and not overwrite:
         return False
     out.parent.mkdir(parents=True, exist_ok=True)
-    fields = list(dict.fromkeys(k for r in rows for k in r))
+    fields = fields or list(dict.fromkeys(k for r in rows for k in r))
     with out.open("w", newline="", encoding="utf-8-sig") as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
@@ -155,9 +159,9 @@ def out_path(name: str, key: str) -> Path:
     return DATA_DIR / name / key[:4] / f"{key}.csv"
 
 
-def save(name: str, key: str, rows) -> None:
+def save(name: str, key: str, rows, overwrite=False) -> None:
     out = out_path(name, key)
-    if write_csv(out, rows):
+    if write_csv(out, rows, overwrite, DATASETS[name].get("fields")):
         print(f"  已寫入 {out.relative_to(DATA_DIR)}（{len(rows)} 筆）")
     else:
         print(f"  {out.relative_to(DATA_DIR)} 已存在，略過")
@@ -303,6 +307,82 @@ def taiex(day: dt.date):
     return out
 
 
+def institutional_amount(day: dt.date):
+    """BFI82U 三大法人買賣金額統計表（實際金額，單位：元）；舊年份外資沒有分外資自營商"""
+    js = query("fund/BFI82U", type="day", dayDate=f"{day:%Y%m%d}")
+    if js is None:
+        return []
+    fields, data = table(js, "單位名稱")
+    return [{f: (v.strip() if i == 0 else num(v)) for i, (f, v) in enumerate(zip(fields, r))} for r in data]
+
+
+def sector_index(day: dt.date):
+    """MI_INDEX type=IND 的「價格指數(臺灣證券交易所)」：加權指數、各類股指數的收盤與漲跌"""
+    js = query("afterTrading/MI_INDEX", date=f"{day:%Y%m%d}", type="IND")
+    if js is None:
+        return []
+    fields, data = table(js, "指數")
+    rows = []
+    for r in data:
+        f = dict(zip(fields, r))
+        sign = "-" if "-" in f["漲跌(+/-)"] else ""
+        change = num(f["漲跌點數"])
+        rows.append({
+            "Date": roc(day),
+            "指數": f["指數"].strip(),
+            "收盤指數": num(f["收盤指數"]),
+            "漲跌點數": f"{sign}{change}" if change else "",
+            "漲跌百分比": num(f["漲跌百分比(%)"]),
+        })
+    return rows
+
+
+# 注意股、處置股：沒有資料的日子是正常的（照樣寫出只有標題的檔案），所以用固定欄位
+NOTICE_COLS = ["證券代號", "證券名稱", "累計次數", "注意交易資訊", "日期", "收盤價", "本益比"]
+DISPOSITION_COLS = ["證券代號", "證券名稱", "公布日期", "累計", "處置條件", "處置起迄時間", "處置措施"]
+
+
+def announcement(path, cols, **params):
+    js = query(path, **params)
+    if js is None:
+        return None
+    # 去掉 HTML 標記（例如原因裡標紅字的 <font>）與多餘空白
+    return [{c: " ".join(re.sub(r"<[^>]+>", "", str(r.get(c, ""))).split()) for c in cols} for r in rwd_rows(js)]
+
+
+def notice(day: dt.date):
+    """公布注意有價證券資訊：當天被列為注意股的（含原因）"""
+    return announcement("announcement/notice", NOTICE_COLS, querytype=1,
+                        startDate=f"{day:%Y%m%d}", endDate=f"{day:%Y%m%d}")
+
+
+def disposition(day: dt.date):
+    """公布處置有價證券資訊：查某一天會列出「當天在處置期間內」的股票"""
+    return announcement("announcement/punish", DISPOSITION_COLS,
+                        startDate=f"{day:%Y%m%d}", endDate=f"{day:%Y%m%d}")
+
+
+def ex_rights_forecast():
+    """TWT48U 除權除息預告表（目前公告、尚未除權息的）"""
+    js = query("exRight/TWT48U")
+    if js is None:
+        return []
+    rows = []
+    for r in rwd_rows(js):
+        d = parse_date(r["除權除息日期"])
+        rows.append({
+            "除權除息日期": d.isoformat() if d else r["除權除息日期"],
+            "股票代號": r["股票代號"].strip(),
+            "名稱": r["名稱"].strip(),
+            "除權息": r["除權息"],
+            "無償配股率": num(r["無償配股率"]),
+            "現金增資配股率": num(r["現金增資配股率"]),
+            "現金增資認購價": num(r["現金增資認購價"]),
+            "現金股利": re.sub(r"<[^>]+>", "", num(r["現金股利"])).strip(),
+        })
+    return rows
+
+
 def ex_rights(start: dt.date, end: dt.date):
     """TWT49U 除權除息計算結果 -> {'2026-10-16': [...], ...}"""
     js = query("exRight/TWT49U", startDate=f"{start:%Y%m%d}", endDate=f"{end:%Y%m%d}")
@@ -316,8 +396,14 @@ DATASETS = {
     "stock_day_all":    {"by_day": stock_day_all},    # 個股日成交（K 線本體）
     "bwibbu_all":       {"by_day": bwibbu_all},       # 本益比/殖利率/淨值比
     "margin":           {"by_day": margin},           # 融資融券（晚上才公布，多半隔天補上）
-    "institutional":    {"by_day": institutional},    # 三大法人買賣超
+    "institutional":    {"by_day": institutional},    # 三大法人買賣超（個股）
+    "institutional_amount": {"by_day": institutional_amount},  # 三大法人買賣金額（大盤實際金額）
+    "sector_index":     {"by_day": sector_index},     # 類股指數
+    # 注意股、處置股：當天沒有也是正常的，所以最近 REFRESH 個交易日每次都重新查（傍晚查到空的不代表晚點沒有）
+    "notice":           {"by_day": notice, "fields": NOTICE_COLS, "refresh": True},
+    "disposition":      {"by_day": disposition, "fields": DISPOSITION_COLS, "refresh": True},
     "ex_rights":        {"by_range": ex_rights},      # 除權除息計算結果（查最近 14 天，晚公布的也抓得到）
+    "ex_rights_forecast": {"snapshot": ex_rights_forecast},  # 除權除息預告（只保留最新一份）
     "monthly_revenue":  {"url": OPENAPI + "/opendata/t187ap05_L", "mode": "monthly"},               # 月營收
     "holiday_schedule": {"url": OPENAPI + "/holidaySchedule/holidaySchedule", "mode": "snapshot"},  # 休市日程
 }
@@ -329,13 +415,15 @@ def recent_trading_days():
     return days[-LOOKBACK:]
 
 
-def fetch_by_day(name, fn):
-    for key in recent_trading_days():
-        if out_path(name, key).exists():
+def fetch_by_day(name, cfg):
+    days = recent_trading_days()
+    for key in days:
+        refresh = cfg.get("refresh") and key in days[-REFRESH:]
+        if out_path(name, key).exists() and not refresh:
             continue
-        rows = fn(dt.date.fromisoformat(key))
-        if rows:
-            save(name, key, rows)
+        rows = cfg["by_day"](dt.date.fromisoformat(key))
+        if rows or (rows is not None and cfg.get("fields")):
+            save(name, key, rows, overwrite=refresh)
         else:
             print(f"  {key} 尚未公布，下次執行再補")
 
@@ -363,7 +451,12 @@ def main() -> int:
         print(f"[{name}]")
         try:
             if "by_day" in cfg:
-                fetch_by_day(name, cfg["by_day"])
+                fetch_by_day(name, cfg)
+            elif "snapshot" in cfg:
+                rows = cfg["snapshot"]()
+                out = DATA_DIR / name / f"{name}.csv"
+                write_csv(out, rows, overwrite=True)
+                print(f"  已更新 {out.relative_to(DATA_DIR)}（{len(rows)} 筆）")
             elif "by_month" in cfg:
                 # 月初時連上個月一起查，避免月底的交易日漏掉
                 months = {f"{d:%Y-%m}": d for d in (TODAY - dt.timedelta(days=10), TODAY)}

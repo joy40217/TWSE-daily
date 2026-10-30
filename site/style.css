@@ -124,7 +124,7 @@ h3 { font-size: 15px; margin: 0 0 8px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
 
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th { color: var(--muted); font-weight: 500; font-size: 12px; text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+th { white-space: nowrap; color: var(--muted); font-weight: 500; font-size: 12px; text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--line); }
 td { padding: 5px 6px; text-align: right; border-bottom: 1px solid var(--grid); white-space: nowrap; }
 th:nth-child(-n+2), td:nth-child(-n+2) { text-align: left; }
 td.name { max-width: 9em; overflow: hidden; text-overflow: ellipsis; }
@@ -133,6 +133,15 @@ td.name { max-width: 9em; overflow: hidden; text-overflow: ellipsis; }
 td a { color: inherit; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
 td a:hover { color: var(--accent); text-decoration-color: currentColor; }
 .empty { color: var(--muted); font-size: 14px; padding: 8px 0; }
+.muted { color: var(--muted); }
+.table-tall { max-height: 420px; overflow-y: auto; }
+td .reason { display: inline-block; max-width: 16em; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+h3.gap { margin-top: 16px; }
+.badges { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 0; }
+.badge { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; }
+.badge.warn { color: var(--trust); }
+.badge.alert { color: var(--up); }
+.badge.info { color: var(--accent); }
 
 .nowrap { white-space: nowrap; }
 .up { color: var(--up); }
