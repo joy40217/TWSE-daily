@@ -91,13 +91,15 @@
 2. 名稱填 `twse-daily-dispatch` → Deploy
 3. 按 **Edit code**，把編輯器裡的程式全部換成 `cloudflare/dispatch.js` 的內容 → Deploy
 4. 回到 Worker 頁面 → Settings → **Variables and Secrets** → Add：Type 選 **Secret**，名稱 `GITHUB_TOKEN`，值貼上第 1 步的 token → Deploy
-5. Settings → **Trigger Events** → Add → **Cron Triggers**，加入三個（Cloudflare 也用 UTC）：
+5. Settings → **Trigger Events** → Add → **Cron Triggers**，加入三個（Cloudflare 也用 UTC）。
+   星期要寫 `MON-FRI`：Cloudflare 的星期從 1 = 週日算起，寫 `1-5` 會變成週日到週四，跟 GitHub 不同。
+   加好後看旁邊的「Runs」，應該顯示 Monday through Friday：
 
    | Cron | 台灣時間 |
    |---|---|
-   | `7 7 * * 1-5` | 15:07 |
-   | `23 10 * * 1-5` | 18:23 |
-   | `23 14 * * 1-5` | 22:23 |
+   | `7 7 * * MON-FRI` | 15:07 |
+   | `23 10 * * MON-FRI` | 18:23 |
+   | `23 14 * * MON-FRI` | 22:23 |
 
 **3. 確認有沒有成功**
 
