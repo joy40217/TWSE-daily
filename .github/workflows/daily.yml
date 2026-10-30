@@ -47,7 +47,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "沒有新資料"
           else
-            git commit -m "data: $(TZ=Asia/Taipei date +%F)"
+            git commit -m "$(bash scripts/commit_message.sh data data)"   # 訊息寫資料日期，不是執行當天
             git pull --rebase   # 回補 workflow 可能同時推了資料
             git push
           fi
@@ -84,7 +84,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "沒有新報告"
           else
-            git commit -m "report: $(TZ=Asia/Taipei date +%F)"
+            git commit -m "$(bash scripts/commit_message.sh report site/data/days)"
             git pull --rebase
             git push
           fi
