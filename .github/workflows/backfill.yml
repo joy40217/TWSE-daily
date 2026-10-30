@@ -19,7 +19,7 @@ permissions:
 jobs:
   backfill:
     runs-on: ubuntu-latest
-    timeout-minutes: 350   # GitHub 上限 6 小時，一年約 40 分鐘，一次別補太多年
+    timeout-minutes: 350   # GitHub 上限 6 小時；全部資料集一年約 3 小時，一次補一年
     steps:
       - uses: actions/checkout@v4
 
