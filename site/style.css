@@ -135,7 +135,17 @@ td a:hover { color: var(--accent); text-decoration-color: currentColor; }
 .empty { color: var(--muted); font-size: 14px; padding: 8px 0; }
 .muted { color: var(--muted); }
 .table-tall { max-height: 420px; overflow-y: auto; }
-td .reason { display: inline-block; max-width: 16em; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+td .reason {
+  display: inline-block; max-width: 16em; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom;
+  font: inherit; color: inherit; text-align: left; white-space: nowrap;
+  background: none; border: 0; padding: 0; cursor: pointer;
+  text-decoration: underline dotted var(--muted); text-underline-offset: 3px;
+}
+td .reason[aria-expanded="true"] { text-decoration: none; color: var(--muted); }
+tr.detail td { white-space: normal; text-align: left; font-size: 13px; line-height: 1.6; background: var(--grid); padding: 8px 10px; }
+/* 手機上表格會橫向捲動：全文固定在可見範圍內，不跟著表格寬度被切掉 */
+tr.detail td > div { position: sticky; left: 10px; width: min(100%, calc(100vw - 92px)); }
+.tag { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; margin-left: 4px; vertical-align: 1px; }
 h3.gap { margin-top: 16px; }
 .badges { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 0; }
 .badge { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; }

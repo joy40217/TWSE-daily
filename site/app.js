@@ -201,25 +201,37 @@ function renderExForecast() {
   $("ex-forecast").innerHTML = `<h3>除權息預告</h3>${table(items, cols, latest ? "目前沒有預告" : "預告資料載入失敗")}`;
 }
 
-// 類股指數依漲跌幅排序；大分類（底下還有細分類股）以灰字標示
+// 類股指數依漲跌幅排序；大分類（底下還有細分類股）加上「大分類」標籤
 function renderSectors(r) {
   const head = `<div class="panel-head"><h3>類股漲跌</h3></div>`;
   if (!r.sectors) return void ($("sectors").innerHTML = `${head}<div class="empty">類股指數尚未公布</div>`);
   const rows = r.sectors.map((x) =>
-    `<tr><td class="${x.group ? "muted" : ""}">${esc(x.name)}</td><td>${nf(x.close, 2)}</td>` +
+    `<tr><td>${esc(x.name)}${x.group ? ` <span class="tag">大分類</span>` : ""}</td><td>${nf(x.close, 2)}</td>` +
     `<td><span class="${tone(x.pct)}">${signed(x.pct, 2)}</span></td></tr>`).join("");
   $("sectors").innerHTML = `${head}<div class="table-scroll table-tall"><table><thead><tr><th>類股</th><th>收盤指數</th><th>漲跌%</th></tr></thead>` +
-    `<tbody>${rows}</tbody></table></div><p class="note">灰字為大分類（例如電子工業類包含半導體、光電等）。</p>`;
+    `<tbody>${rows}</tbody></table></div><p class="note">「大分類」涵蓋多個類股，例如電子工業類包含半導體、光電等。</p>`;
 }
 
 function renderFlagged(r) {
-  const notice = table(r.notice, [["累計", (x) => esc(x.count)], ["原因", (x) => `<span class="reason" title="${esc(x.info)}">${esc(x.info)}</span>`]],
+  // 原因通常很長，先只顯示開頭，點一下在下方整列展開全文（手機沒有滑鼠，不能靠 title 提示；表格會橫向捲動，也不能原地展開）
+  const notice = table(r.notice, [["累計", (x) => esc(x.count)],
+    ["原因", (x) => `<button type="button" class="reason" aria-expanded="false">${esc(x.info)}</button>`]],
     r.notice ? "這天沒有注意股" : "尚未公布");
   const disposition = table(r.disposition, [["處置期間", (x) => esc(x.period)], ["措施", (x) => esc(x.measure)]],
     r.disposition ? "這天沒有處置中的股票" : "尚未公布");
   $("flagged").innerHTML = `<h3>處置股（處置期間內）</h3>${disposition}<h3 class="gap">注意股</h3>${notice}` +
-    `<p class="note">不含權證。滑過原因可看全文。</p>`;
+    `<p class="note">不含權證。原因太長只顯示開頭，點一下可展開全文。</p>`;
 }
+
+$("flagged").addEventListener("click", (e) => {
+  const b = e.target.closest(".reason");
+  if (!b) return;
+  const tr = b.closest("tr");
+  const open = tr.nextElementSibling?.classList.contains("detail");
+  if (open) tr.nextElementSibling.remove();
+  else tr.insertAdjacentHTML("afterend", `<tr class="detail"><td colspan="${tr.cells.length}"><div>${esc(b.textContent)}</div></td></tr>`);
+  b.setAttribute("aria-expanded", String(!open));
+});
 
 // ---- 日期切換 ----
 
