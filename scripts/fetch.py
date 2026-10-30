@@ -30,7 +30,7 @@ TW_TZ = dt.timezone(dt.timedelta(hours=8))
 TODAY = dt.datetime.now(TW_TZ).date()
 PAUSE = 3      # 每次查詢網站的間隔秒數，查詢太密集會被暫時封鎖
 LOOKBACK = 5   # 每次檢查最近幾個交易日有沒有缺資料
-REFRESH = 2    # 「沒有資料也正常」的資料集（注意股、處置股），最近幾個交易日每次都重新查
+REFRESH = 2    # 標記 refresh 的資料集，最近幾個交易日每次都重新查、有資料就覆寫
 
 DAY_KEYS = ["Date", "日期", "資料日期", "出表日期"]
 MONTH_KEYS = ["資料年月"]
@@ -393,10 +393,12 @@ def ex_rights(start: dt.date, end: dt.date):
 # 順序有意義：taiex 放第一個，它的日期就是交易日清單，其他逐日資料依此判斷要查哪幾天
 DATASETS = {
     "taiex":            {"by_month": taiex},          # 加權指數日 K
-    "stock_day_all":    {"by_day": stock_day_all},    # 個股日成交（K 線本體）
-    "bwibbu_all":       {"by_day": bwibbu_all},       # 本益比/殖利率/淨值比
-    "margin":           {"by_day": margin},           # 融資融券（晚上才公布，多半隔天補上）
-    "institutional":    {"by_day": institutional},    # 三大法人買賣超（個股）
+    # 這四個公布後內容可能還會變（10/30 觀察到行情 13:56 公布、14:53 又變了一次），下午排程抓到的不一定是定案，
+    # 所以也每次重查最近 REFRESH 個交易日；內容沒變（只差排列順序）或還沒公布（查到空的）時不會覆寫
+    "stock_day_all":    {"by_day": stock_day_all, "refresh": True},    # 個股日成交（K 線本體）
+    "bwibbu_all":       {"by_day": bwibbu_all, "refresh": True},       # 本益比/殖利率/淨值比
+    "margin":           {"by_day": margin, "refresh": True},           # 融資融券（晚上才公布，多半隔天補上）
+    "institutional":    {"by_day": institutional, "refresh": True},    # 三大法人買賣超（個股）
     "institutional_amount": {"by_day": institutional_amount},  # 三大法人買賣金額（大盤實際金額）
     "sector_index":     {"by_day": sector_index},     # 類股指數
     # 注意股、處置股：當天沒有也是正常的，所以最近 REFRESH 個交易日每次都重新查（傍晚查到空的不代表晚點沒有）
@@ -415,17 +417,31 @@ def recent_trading_days():
     return days[-LOOKBACK:]
 
 
+def same_rows(out: Path, rows) -> bool:
+    """已存的檔案內容是否跟 rows 相同（不管順序：三大法人買賣超相同的股票，每次查詢的排列順序可能不同）"""
+    with out.open(encoding="utf-8-sig", newline="") as f:
+        old = list(csv.reader(f))
+    fields = list(dict.fromkeys(k for r in rows for k in r))
+    if old[:1] != [fields] and rows:
+        return False
+    new = [[str(r.get(k, "")) for k in fields] for r in rows]
+    return sorted(old[1:]) == sorted(new)
+
+
 def fetch_by_day(name, cfg):
     days = recent_trading_days()
     for key in days:
+        out = out_path(name, key)
         refresh = cfg.get("refresh") and key in days[-REFRESH:]
-        if out_path(name, key).exists() and not refresh:
+        if out.exists() and not refresh:
             continue
         rows = cfg["by_day"](dt.date.fromisoformat(key))
-        if rows or (rows is not None and cfg.get("fields")):
-            save(name, key, rows, overwrite=refresh)
-        else:
+        if not rows and not (rows is not None and cfg.get("fields")):
             print(f"  {key} 尚未公布，下次執行再補")
+        elif out.exists() and same_rows(out, rows):
+            print(f"  {key} 內容沒有變")
+        else:
+            save(name, key, rows, overwrite=refresh)
 
 
 def fetch_openapi(name, cfg):
