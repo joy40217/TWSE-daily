@@ -41,6 +41,7 @@
 4. （選用）到 Settings → Secrets and variables → Actions 新增 `DISCORD_WEBHOOK_URL`，
    值為 Discord 頻道的 Webhook 網址（頻道設定 → 整合 → Webhook → 新 Webhook → 複製網址）
 5. 到 Actions 分頁手動執行一次「每日抓取證交所資料」，確認正常
+6. （建議）設定 Cloudflare Worker 準時觸發，見下方「準時觸發（Cloudflare Workers）」；沒設定的話只靠 GitHub 備援排程，資料會晚 4～5 小時
 
 ## 使用方式
 
@@ -48,18 +49,20 @@
 
 不需要手動操作。「每日抓取證交所資料」workflow 每個平日執行四次：
 
-| 台灣時間 | 做什麼 |
-|---|---|
-| 15:07 | 抓加權指數、個股收盤行情（約 14:00 公布），先更新網頁（不送通知）；三大法人、本益比等這時還沒公布 |
-| 18:23 | 抓本益比（約 17:10）、三大法人（約 16:20）等，更新網頁（不送通知） |
-| 22:23 | 再抓一次（補上晚間公布的融資融券，通常約 21:00 前公布），更新網頁、送 Discord 通知 |
-| 23:47 | 備援：跟 22:23 做一樣的事，上一次沒跑到時補上；已經通知過的日子不會重複通知 |
+| 台灣時間 | 觸發方式 | 做什麼 |
+|---|---|---|
+| 15:07 | Cloudflare Worker | 抓加權指數、個股收盤行情（約 14:00 公布），先更新網頁（不送通知）；三大法人、本益比等這時還沒公布 |
+| 18:23 | Cloudflare Worker | 抓本益比（約 17:10）、三大法人（約 16:20）等，更新網頁（不送通知） |
+| 22:23 | Cloudflare Worker | 再抓一次（補上晚間公布的融資融券，通常約 21:00 前公布），更新網頁、送 Discord 通知 |
+| 23:47 | GitHub 排程（備援） | 跟 22:23 做一樣的事；實際多半凌晨 4～5 點才跑，Worker 沒觸發成功時最晚隔天清晨補上 |
 
-每次排程都會更新網頁；Discord 通知只在最新交易日的報告「第一次有融資融券」時送一次，
-所以傍晚先更新的網頁不會觸發通知，晚上補齊後才通知。
+每次執行都會更新網頁；Discord 通知只在最新交易日的報告「第一次有融資融券」時送一次，
+所以傍晚先更新的網頁不會觸發通知，晚上補齊後才通知，備援再跑一次也不會重複通知。
 
-排程刻意避開整點：整點是 GitHub 排程最壅塞的時段，常會延遲甚至被丟棄。
-就算避開整點，排程偶爾還是會延遲或沒跑，所以才加一次備援。
+為什麼不用 GitHub 自己的排程：GitHub 排程在負載高時會延遲，
+2026 年 6～10 月實測每天 UTC 00:00 的排程平均晚 4 小時才跑（10 月約 4.8 小時，最久 10.7 小時），
+避開整點也一樣。workflow_dispatch（手動或用 API 觸發）則幾秒內就開始，所以改由 Worker 準時觸發。
+
 每次執行會檢查最近 5 個交易日，缺的就補；某天沒抓到的資料（例如融資融券較晚公布），
 下次執行時會自動補上。
 
@@ -67,6 +70,42 @@
 
     pip install requests
     python scripts/fetch.py
+
+### 準時觸發（Cloudflare Workers）
+
+用 Cloudflare Workers 免費方案的 Cron Trigger，準時呼叫 GitHub API 觸發 workflow。程式在 `cloudflare/dispatch.js`。
+
+**1. 建立 GitHub token**
+
+1. GitHub 右上角頭像 → Settings → 左側最下面 Developer settings → Personal access tokens → **Fine-grained tokens** → Generate new token
+2. Token name 填 `twse-daily-dispatch`；Expiration 選最長的期限（到期前 GitHub 會寄信提醒，到期後依同樣步驟換新 token）
+3. Repository access 選 **Only select repositories**，只勾這個 repo
+4. Permissions → Repository permissions → **Actions** 選 **Read and write**（Metadata 會自動變成 Read-only，其他都不用開）
+5. 產生後複製 token（只會顯示這一次）
+
+這個 token 只能觸發、取消這個 repo 的 workflow，改不了程式碼，也碰不到其他 repo。
+
+**2. 建立 Worker**
+
+1. 註冊並登入 [Cloudflare](https://dash.cloudflare.com/)，左側選 **Workers & Pages** → Create → Create Worker（從 Hello World 開始）
+2. 名稱填 `twse-daily-dispatch` → Deploy
+3. 按 **Edit code**，把編輯器裡的程式全部換成 `cloudflare/dispatch.js` 的內容 → Deploy
+4. 回到 Worker 頁面 → Settings → **Variables and Secrets** → Add：Type 選 **Secret**，名稱 `GITHUB_TOKEN`，值貼上第 1 步的 token → Deploy
+5. Settings → **Trigger Events** → Add → **Cron Triggers**，加入三個（Cloudflare 也用 UTC）：
+
+   | Cron | 台灣時間 |
+   |---|---|
+   | `7 7 * * 1-5` | 15:07 |
+   | `23 10 * * 1-5` | 18:23 |
+   | `23 14 * * 1-5` | 22:23 |
+
+**3. 確認有沒有成功**
+
+- 到 Worker 的 Logs（或 Observability）看執行紀錄，成功會印出「已觸發 daily.yml」
+- 到 GitHub Actions 分頁看，Worker 觸發的執行會顯示為 `workflow_dispatch`
+- 失敗時 Logs 會顯示 GitHub 的回應：401 是 token 貼錯或過期，403、404 多半是 token 沒開 Actions 權限或沒選到這個 repo
+
+想調整觸發時間，改 Cron Triggers 即可，不用動 repo；記得同步更新 `cloudflare/dispatch.js` 開頭的註解和上面的排程表。
 
 ### 收盤後報告
 

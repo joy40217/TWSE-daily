@@ -1,13 +1,10 @@
 name: 每日抓取證交所資料
 
 on:
+  # 平常由 Cloudflare Worker（cloudflare/dispatch.js）在台灣 15:07、18:23、22:23 用 workflow_dispatch 準時觸發；
+  # GitHub 自己的排程常延遲 4～5 小時，只留一個當備援：Worker 沒觸發成功時，最晚隔天清晨補上
   schedule:
-    # GitHub 用 UTC 時間（台灣 = UTC+8），週一到週五
-    # 避開整點：整點是 GitHub 排程最壅塞的時段，常被延遲甚至直接丟棄
-    - cron: "7 7 * * 1-5"     # 台灣 15:07：加權指數、個股收盤行情已公布（約 14:00，14:53 前可能還會更正），先更新網頁（不通知）
-    - cron: "23 10 * * 1-5"   # 台灣 18:23：抓本益比、三大法人等晚點公布的資料，更新網頁（不通知）
-    - cron: "23 14 * * 1-5"   # 台灣 22:23：融資融券公布後再抓一次，更新網頁並送 Discord 通知
-    - cron: "47 15 * * 1-5"   # 台灣 23:47：備援，上一次沒跑到時補上（有跑過則不會重複通知）
+    - cron: "47 15 * * 1-5"   # UTC，台灣 23:47（實際多半凌晨 4～5 點才跑）；有跑過的日子不會重複通知
   workflow_dispatch:
     inputs:
       report:
@@ -55,7 +52,7 @@ jobs:
 
   report:
     needs: fetch
-    # 每次排程都更新網頁（收盤價等先公布的資料先上），手動執行則看有沒有勾選「產生報告」；
+    # 每次排程都更新網頁（收盤價等先公布的資料先上）；手動執行和 Worker 觸發則看「產生報告」（Worker 固定勾選）；
     # 抓資料部分失敗也照樣產生報告。Discord 通知由 report.py 判斷：最新交易日第一次有融資融券時才送
     if: ${{ !cancelled() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.report)) }}
     runs-on: ubuntu-latest
