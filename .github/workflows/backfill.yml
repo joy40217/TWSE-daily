@@ -10,7 +10,7 @@ on:
         description: "結束日期（留空 = 昨天）"
         required: false
       only:
-        description: "只補部分資料集，逗號分隔，例如 stock_day_all,taiex（留空 = 全部）"
+        description: "只補部分資料集，逗號分隔，例如 day_trading,sbl_short 或 monthly_revenue,income_statement（留空 = 全部）"
         required: false
 
 permissions:
@@ -19,7 +19,7 @@ permissions:
 jobs:
   backfill:
     runs-on: ubuntu-latest
-    timeout-minutes: 350   # GitHub 上限 6 小時；全部資料集一年約 3 小時，一次補一年
+    timeout-minutes: 350   # GitHub 上限 6 小時；全部資料集一年約 3.5～4 小時，一次補一年
     steps:
       - uses: actions/checkout@v4
 

@@ -58,7 +58,10 @@
       <p class="note" id="ind-note"></p>
       <p class="note">均線：<span class="ma5">MA5</span>　<span class="ma20">MA20</span>　<span class="ma60">MA60</span>　<span class="ma100">MA100</span>；
         <span class="bb">布林通道</span>為 20 日均線 ± 2 個標準差；「除」標記為除權息日；
-        「事件」標記<span class="trust">注意股</span>（小點）、<span class="up">處置</span>開始日、無成交（標在前一個交易日）。<br>
+        「事件」標記<span class="trust">注意股</span>（小點）、<span class="up">處置</span>開始日、無成交（標在前一個交易日）。
+        游標所在那一天會在每張圖畫直線，主要的線的端點拉橫線到刻度、用各線的顏色標出數值；
+        K 線（最高、最低、均線、布林通道）和河流圖的數值改寫在圖表頂端，刻度不另外標；
+        點一下圖表會用<span style="color: var(--accent)">藍色直線、藍色虛線</span>和深色標籤標記那一天，說明列也停在那一天，再點一次取消。<br>
         還原權息價：除權息日以前的價格依參考價往下調，K 線和指標不會因為配息配股出現假的下跌；最新一天等於實際價格，
         但以前的價格、均線會跟看盤軟體不同，要對照實際成交價請切到「原始價格」。
         還原權息只處理除權息，減資、面額變更（例如股票分割）的日子會有跳空。</p>
@@ -73,7 +76,17 @@
     <section class="panel" id="panel-margin">
       <div class="panel-head"><h2>融資融券餘額</h2><div class="legend" id="legend-margin"></div></div>
       <div class="chart chart-sm" id="chart-margin"></div>
-      <p class="note"><span class="financing">融資餘額</span>（刻度在右）、<span class="short">融券餘額</span>（走勢，數值見上方）。單位：張。</p>
+      <p class="note"><span class="financing">融資餘額</span>（刻度在右）、<span class="short">融券餘額</span>（刻度在左）。單位：張。</p>
+    </section>
+
+    <section class="panel" id="panel-chip">
+      <div class="panel-head">
+        <h2>當沖、借券、大戶</h2>
+        <div class="legend" id="legend-chip"></div>
+        <div class="tabs" id="chip-tabs" role="group" aria-label="籌碼"></div>
+      </div>
+      <div class="chart chart-sm" id="chart-chip"></div>
+      <p class="note" id="chip-note"></p>
     </section>
 
     <section class="panel" id="panel-value">
@@ -89,8 +102,14 @@
     <section class="panel" id="panel-rev">
       <div class="panel-head"><h2>月營收</h2><div class="legend" id="legend-rev"></div></div>
       <div class="chart chart-sm" id="chart-rev"></div>
-      <p class="note">長條為當月營收（億元），線為<span class="yoy">年增率 %</span>（左軸）。
-        月營收從開始每日抓取後逐月累積，滿 3 個月才會顯示圖表。</p>
+      <p class="note">長條為當月營收（億元），線為<span class="yoy">年增率 %</span>（左軸）。滿 3 個月才會顯示圖表。</p>
+    </section>
+
+    <section class="panel" id="panel-fin">
+      <div class="panel-head"><h2>季報</h2><div class="legend" id="legend-fin"></div></div>
+      <div class="chart chart-sm" id="chart-fin"></div>
+      <p class="note">長條為單季每股盈餘（元），線為<span class="ma5">毛利率</span>、<span class="ma20">營益率</span>、<span class="ma60">淨利率</span> %（左軸）。
+        資料來自公開資訊觀測站的綜合損益表，原始數字是當年累計，這裡減去前一季換算成單季；金融業沒有營收、毛利，只有每股盈餘。</p>
     </section>
 
     <section class="grid">
@@ -102,7 +121,7 @@
   </main>
 
   <footer class="wrap foot">
-    資料來源：臺灣證券交易所。技術訊號以還原權息收盤價計算，條件與收盤報告相同，但也列出成交金額不到 1 億的日子。
+    資料來源：臺灣證券交易所、公開資訊觀測站（月營收、季報）、臺灣集中保管結算所（股權分散）。技術訊號以還原權息收盤價計算，條件與收盤報告相同，但也列出成交金額不到 1 億的日子。
     本頁僅為資料整理，不構成任何投資建議。<br>
     圖表使用 <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a> 的 Lightweight Charts™。
   </footer>

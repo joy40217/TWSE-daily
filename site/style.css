@@ -100,6 +100,8 @@ main { padding-top: 16px; padding-bottom: 8px; display: grid; gap: 16px; }
 .card .label { color: var(--muted); font-size: 13px; }
 .card .value { font-size: 22px; font-weight: 650; margin-top: 2px; }
 .card .detail { font-size: 13px; color: var(--muted); }
+/* 卡片裡的片語盡量不拆開，但卡片太窄、整段放不下時還是換行，不要超出框線 */
+.card .detail .nowrap { display: inline-block; white-space: normal; }
 
 .panel { scroll-margin-top: 84px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; min-width: 0; }
 .panel-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
@@ -110,8 +112,16 @@ h3 { font-size: 15px; margin: 0 0 8px; }
 .ranges button, .tabs button { height: 30px; padding: 0 10px; font-size: 13px; }
 .ranges button.on, .tabs button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 
-.chart { height: 420px; }
+.chart { height: 420px; position: relative; }
 .chart-sm { height: 240px; }
+/* 個股頁標記的那一天：疊在每張日線圖上的直線（不擋滑鼠，不蓋到下方的日期刻度） */
+.pin-line { position: absolute; top: 0; bottom: 28px; width: 0; border-left: 1.5px solid var(--accent); pointer-events: none; z-index: 3; }
+/* 圖表頂端的數值列（均線、河流圖各倍數），左邊讓出左側刻度的寬度 */
+.chart-top {
+  position: absolute; top: 4px; left: 72px; right: 90px; z-index: 3; pointer-events: none;
+  font-size: 12px; line-height: 1.5; white-space: normal;
+}
+.chart-top span { display: inline-block; background: color-mix(in srgb, var(--panel) 80%, transparent); padding: 0 2px; }
 .chart-ind { height: 170px; }
 .sub-head { margin: 10px 0 4px; }
 .note { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
@@ -145,6 +155,14 @@ td .reason[aria-expanded="true"] { text-decoration: none; color: var(--muted); }
 tr.detail td { white-space: normal; text-align: left; font-size: 13px; line-height: 1.6; background: var(--grid); padding: 8px 10px; }
 /* 手機上表格會橫向捲動：全文固定在可見範圍內，不跟著表格寬度被切掉 */
 tr.detail td > div { position: sticky; left: 10px; width: min(100%, calc(100vw - 92px)); }
+/* 個股頁表格的日期：看起來跟連結一樣，點了跳到 K 線那一天；旁邊的 ↗ 連到當天收盤報告 */
+td button.day {
+  font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer;
+  text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px;
+}
+td button.day:hover { color: var(--accent); text-decoration-color: currentColor; }
+td a.report { color: var(--muted); text-decoration: none; font-size: 12px; }
+td a.report:hover { color: var(--accent); }
 /* 個股頁：成交金額低的訊號、統計表的比較基準列 */
 tr.thin td { color: var(--muted); }
 tr.base td { border-top: 1px solid var(--line); color: var(--muted); }

@@ -5,7 +5,8 @@
   python scripts/backfill.py 2026-01-01 2026-06-30                  # 指定區間
   python scripts/backfill.py 2026-01-01 --only stock_day_all,taiex  # 只補部分資料集
 
-可回補 fetch.py 裡所有網站來源的資料集（monthly_revenue、holiday_schedule、ex_rights_forecast 沒有歷史查詢）。
+可回補 fetch.py 裡所有網站來源的資料集，以及從公開資訊觀測站回補月營收（monthly_revenue）、
+季報綜合損益表（income_statement）；holiday_schedule、ex_rights_forecast、shareholding 沒有歷史查詢。
 抓取與轉換都用 fetch.py 的函式，回補的檔案跟每日抓的格式完全相同。
 已存在的檔案會略過，中斷後重跑會從缺的地方接著補。
 """
@@ -18,7 +19,8 @@ from fetch import DATASETS, TODAY, out_path, save
 MAX_FAILS = 5   # 連續失敗這麼多次就停下來（多半是被封鎖了），稍後重跑即可
 BY_DAY = {name: cfg["by_day"] for name, cfg in DATASETS.items() if "by_day" in cfg}
 EMPTY_OK = {name for name, cfg in DATASETS.items() if cfg.get("fields")}   # 注意股、處置股：當天沒有也是正常的
-SUPPORTED = ["taiex", "ex_rights"] + list(BY_DAY)
+PERIODIC = ["monthly_revenue", "income_statement"]   # 每月、每季一份，不需要交易日清單
+SUPPORTED = ["taiex", "ex_rights"] + list(BY_DAY) + PERIODIC
 
 
 def months(start: dt.date, end: dt.date):
@@ -62,6 +64,21 @@ def main() -> int:
 
     for m_start, m_end in months(args.start, end):
         print(f"== {m_start:%Y-%m}")
+        # 月營收、季報：每月或每季一份，從公開資訊觀測站查（還沒公布的月份、季度查不到，略過）
+        periodic = [("monthly_revenue", f"{m_start:%Y-%m}", DATASETS["monthly_revenue"]["history"], (f"{m_start:%Y-%m}",))]
+        if m_start.month % 3 == 0:
+            periodic.append(("income_statement", f"{m_start.year}-Q{m_start.month // 3}",
+                             DATASETS["income_statement"]["by_quarter"], (m_start.year, m_start.month // 3)))
+        for name, key, fn, fn_args in periodic:
+            if name in selected and not out_path(name, key).exists():
+                rows = attempt(f"{name} {key}", fn, *fn_args)
+                if rows:
+                    save(name, key, rows)
+                elif rows is not None:
+                    print(f"  {name} {key} 沒有資料")
+        if not set(selected) - set(PERIODIC):
+            continue
+
         # 加權指數一定要查：用它的日期當作當月的交易日清單
         days = attempt(f"taiex {m_start:%Y-%m}", DATASETS["taiex"]["by_month"], m_end)
         if days is None:

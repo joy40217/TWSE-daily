@@ -13,6 +13,11 @@
     rev       月營收 [[年月, 營收(千元), 年增率(%), 月增率(%), 累計營收(千元), 累計年增率(%)], ...]
     nt        注意股紀錄 [[日期, 注意交易資訊], ...]
     dp        處置紀錄 [[開始日, 結束日, 處置措施, 處置條件], ...]
+    dtr       當沖比率（%）：當沖成交股數 / 成交股數；那天有當沖資料但不在名單上為 0
+    sb        借券賣出餘額（張）
+    sh        集保股權分散（每週）[[資料日期, 千張以上持股 %, 400 張以上持股 %, 股東人數, 千張以上人數], ...]
+    fin       季報（單季，千元）[[季度, 營收, 營業毛利, 營業利益, 歸屬母公司淨利, 每股盈餘], ...]；
+              公開資訊觀測站是當年累計，這裡減去前一季累計換算成單季，前一季沒有資料時為 null
 
 另外每檔產生一份精簡摘要 site/data/summary/<代號>.json（約 1～2 KB），給排程任務直接讀最新狀態，
 不必下載完整歷史；每一檔都有，所以看不出使用者追蹤哪些股票。欄位見 summary()。
@@ -59,8 +64,41 @@ def rows_by_code(con, table, code_col, code):
         con.row_factory = None
 
 
-def stock_json(con, have, code, days):
-    """days: [(日期, 名稱, 開, 高, 低, 收, 量, 金額, 還原收盤), ...]"""
+# 季報欄位：一般業、金融業等欄位名稱不同，依序找第一個有值的（金融業沒有營收、毛利，會是 null）
+FIN_COLS = (("營業收入",), ("營業毛利（毛損）淨額", "營業毛利（毛損）"), ("營業利益（損失）",),
+            ("淨利（淨損）歸屬於母公司業主", "本期淨利（淨損）", "本期稅後淨利（淨損）"), ("基本每股盈餘（元）",))
+
+
+def quarterly(rows):
+    """{'2026-Q2': row, ...}（當年累計）-> [[季度, 營收, 毛利, 營業利益, 淨利, EPS], ...]（單季）"""
+    ytd = {k: [first(r, *names) for names in FIN_COLS] for k, r in rows.items()}
+    out = []
+    for k in sorted(ytd):
+        year, q = k.split("-Q")
+        prev = ytd.get(f"{year}-Q{int(q) - 1}") if q != "1" else [0] * len(FIN_COLS)
+        if prev is None:
+            out.append([k] + [None] * len(FIN_COLS))
+            continue
+        out.append([k] + [None if a is None or b is None else round(a - b, 2) for a, b in zip(ytd[k], prev)])
+    return out
+
+
+def holders(rows):
+    """一檔股票各週的股權分散 rows -> [[日期, 千張以上 %, 400 張以上 %, 股東人數, 千張以上人數], ...]
+    持股分級 12～15 是 400 張以上，15 是千張以上，17 是合計"""
+    weeks = {}
+    for r in rows:
+        weeks.setdefault(r["_key"], {})[r["持股分級"]] = r
+    out = []
+    for day, lv in sorted(weeks.items()):
+        pct = lambda *ks: round(sum(num(lv[k]["占集保庫存數比例%"]) or 0 for k in ks if k in lv), 2)  # noqa: E731
+        people = lambda k: int(num(lv[k]["人數"]) or 0) if k in lv else None  # noqa: E731
+        out.append([day, pct("15"), pct("12", "13", "14", "15"), people("17"), people("15")])
+    return out
+
+
+def stock_json(con, have, code, days, dt_days):
+    """days: [(日期, 名稱, 開, 高, 低, 收, 量, 金額, 還原收盤), ...]；dt_days：有當沖資料的日子"""
     d = [x[0] for x in days]
     out = {"code": code, "name": days[-1][1], "d": d}
     for i, k in enumerate(("o", "h", "l", "c"), start=2):
@@ -105,6 +143,22 @@ def stock_json(con, have, code, days):
     if "disposition" in have:
         disp = set(con.execute('SELECT "處置起迄時間", "處置措施", "處置條件" FROM disposition WHERE "證券代號" = ?', (code,)))
     out["dp"] = sorted([*map(roc_date, period.split("～")), measure, cond] for period, measure, cond in disp)
+
+    trade = rows_by_code(con, "day_trading", "證券代號", code) if "day_trading" in have else {}
+    out["dtr"] = [None if day not in dt_days or not x[6] else
+                  round((num(trade[day]["當日沖銷交易成交股數"]) or 0) / x[6] * 100, 2) if day in trade else 0
+                  for day, x in zip(d, days)]
+    sbl = rows_by_code(con, "sbl_short", "代號", code) if "sbl_short" in have else {}
+    out["sb"] = [lots(num(sbl[day]["借券賣出當日餘額"]) or 0) if day in sbl else None for day in d]
+    if "shareholding" in have:
+        con.row_factory = sqlite3.Row
+        try:
+            out["sh"] = holders(con.execute('SELECT * FROM shareholding WHERE "證券代號" = ?', (code,)).fetchall())
+        finally:
+            con.row_factory = None
+    else:
+        out["sh"] = []
+    out["fin"] = quarterly(rows_by_code(con, "income_statement", "公司代號", code)) if "income_statement" in have else []
 
     # 去掉整欄都沒資料的欄位（例如 ETF 沒有本益比），減少檔案大小
     for k in [k for k, v in out.items() if isinstance(v, list) and v and all(x is None for x in v)]:
@@ -179,7 +233,8 @@ def summary(con, have, data, adj, latest, forecast, generated_at, taiex):
         "generated_at": generated_at,
         "price": {"open": col("o", i), "high": col("h", i), "low": col("l", i), "close": col("c", i),
                   "change": col("chg", i), "pct": pct(i), "volume": col("v", i), "value": col("val", i)},
-        "units": {"volume": "張", "value": "百萬元", "institutional": "張", "margin": "張", "revenue": "千元"},
+        "units": {"volume": "張", "value": "百萬元", "institutional": "張", "margin": "張", "revenue": "千元",
+                  "sbl_short": "張", "financials": "千元", "day_trading": "%"},
         # 給讀摘要的任務看的說明：哪些欄位用還原權息價（跟看盤軟體的數字不同）
         "basis": "ma、high_60、low_60、risk 用還原權息收盤價（除權息前的價格往下調，最新一天等於實際價格）；"
                  "ma_raw 用原始收盤價（跟一般看盤軟體相同）；range_60 是最近 60 個交易日原始盤中最高、最低價",
@@ -219,6 +274,38 @@ def summary(con, have, data, adj, latest, forecast, generated_at, taiex):
                           "cumulative": cum, "cumulative_yoy": r2(cum_yoy)}
     else:
         out["revenue"] = None
+
+    # 當沖比率（%）：最新一天與 5 日平均；借券賣出餘額（張）
+    j = last_index(data.get("dtr") or [])
+    recent_dtr = [v for v in (data.get("dtr") or [])[max(0, j - 4):j + 1] if v is not None]
+    out["day_trading"] = None if j < 0 else {"date": d[j], "ratio": col("dtr", j),
+                                             "avg_5d": round(sum(recent_dtr) / len(recent_dtr), 2)}
+    j = last_index(data.get("sb") or [])
+    out["sbl_short"] = None if j < 0 else {"date": d[j], "balance": col("sb", j),
+                                           "change": None if col("sb", j - 1) is None else col("sb", j) - col("sb", j - 1)}
+
+    # 集保股權分散（每週）：最新一週與前一週比較
+    sh = data.get("sh") or []
+    if sh:
+        day, big, over400, people, big_people = sh[-1]
+        prev = sh[-2] if len(sh) > 1 else None
+        out["shareholding"] = {"date": day, "over_1000_lots_pct": big, "over_400_lots_pct": over400,
+                               "holders": people, "over_1000_lots_holders": big_people,
+                               "over_1000_lots_pct_change": None if prev is None else round(big - prev[1], 2),
+                               "holders_change": None if prev is None or prev[3] is None else people - prev[3]}
+    else:
+        out["shareholding"] = None
+
+    # 季報：最新一季（單季）與近四季 EPS 合計
+    fin = [q for q in data.get("fin") or [] if q[5] is not None]
+    if fin:
+        quarter, revenue, gross, op, net, eps = fin[-1]
+        margin = lambda v: None if v is None or not revenue else round(v / revenue * 100, 2)  # noqa: E731
+        out["financials"] = {"quarter": quarter, "revenue": revenue, "eps": eps, "gross_margin": margin(gross),
+                             "operating_margin": margin(op), "net_margin": margin(net),
+                             "eps_4q": round(sum(q[5] for q in fin[-4:]), 2) if len(fin) >= 4 else None}
+    else:
+        out["financials"] = None
 
     # 注意股：最近 5 個交易日被列入的紀錄；處置股：最新交易日在處置期間內
     code = data["code"]
@@ -267,7 +354,8 @@ def build(con, have):
     """產生全部個股 JSON 與個股清單，回傳產生的檔數"""
     for table, col in (("stock_day_all", "Code"), ("institutional", "證券代號"), ("margin", "股票代號"), ("bwibbu_all", "Code"),
                        ("ex_rights", "股票代號"), ("monthly_revenue", "公司代號"),
-                       ("notice", "證券代號"), ("disposition", "證券代號")):
+                       ("notice", "證券代號"), ("disposition", "證券代號"), ("day_trading", "證券代號"),
+                       ("sbl_short", "代號"), ("shareholding", "證券代號"), ("income_statement", "公司代號")):
         if table in have:
             con.execute(f'CREATE INDEX IF NOT EXISTS "idx_{table}_code" ON "{table}" ("{col}")')
     for folder in (OUT_DIR, SUMMARY_DIR):
@@ -278,13 +366,14 @@ def build(con, have):
     latest = con.execute("SELECT MAX(date) FROM stock_day_adj").fetchone()[0]
     taiex = {day: num(v) for day, v in con.execute("SELECT _key, ClosingIndex FROM taiex")} if "taiex" in have else {}
     forecast = load_forecast(con, have, latest)
+    dt_days = {r[0] for r in con.execute("SELECT DISTINCT _key FROM day_trading")} if "day_trading" in have else set()
     generated_at = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).isoformat(timespec="seconds")
     listing = []
     sql = ("SELECT code, date, name, open, high, low, close, volume, value, adj_close "
            "FROM stock_day_adj ORDER BY code, date")
     for code, group in groupby(con.execute(sql), key=lambda r: r[0]):
         days = [r[1:] for r in group]
-        data = stock_json(con, have, code, days)
+        data = stock_json(con, have, code, days, dt_days)
         (OUT_DIR / f"{code}.json").write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")),
                                               encoding="utf-8")
         brief = summary(con, have, data, [x[8] for x in days], latest, forecast, generated_at, taiex)

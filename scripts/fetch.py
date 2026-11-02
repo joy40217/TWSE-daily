@@ -3,9 +3,11 @@
 資料來源：
   證交所網站歷史查詢（rwd）：可指定日期，收盤後當天就查得到
     → 個股行情、本益比、融資融券、三大法人（個股與金額）、加權指數、類股指數、除權息、
-      注意股、處置股、除權息預告
+      注意股、處置股、除權息預告、當日沖銷、借券賣出
   OpenAPI：只有最新一份，而且每日行情要到隔天才更新，只用在沒有日期問題的資料
     → 月營收、休市日程
+  公開資訊觀測站（mopsov.twse.com.tw）：季報綜合損益表；歷史月營收（回補用）
+  集保結算所開放資料：集保戶股權分散表（每週一份，只能取得最新一週，從開始抓的那週起累積）
 
 網站資料一律轉成跟 OpenAPI 相同的欄位格式，新舊檔案可以混用。
 每次執行會檢查最近 LOOKBACK 個交易日，缺的就補；
@@ -25,6 +27,8 @@ import urllib3
 
 OPENAPI = "https://openapi.twse.com.tw/v1"
 RWD = "https://www.twse.com.tw/rwd/zh"
+MOPS = "https://mopsov.twse.com.tw"
+TDCC = "https://opendata.tdcc.com.tw/getOD.ashx?id=1-5"
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 TW_TZ = dt.timezone(dt.timedelta(hours=8))
 TODAY = dt.datetime.now(TW_TZ).date()
@@ -100,6 +104,24 @@ def get_json(url: str, retries: int = len(RETRY_WAITS) + 1):
             print("  SSL 驗證失敗，改為略過憑證驗證重試")
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
             verify = False
+        except Exception as e:  # noqa: BLE001
+            print(f"  第 {attempt} 次失敗：{e}")
+            if attempt < retries:
+                time.sleep(RETRY_WAITS[min(attempt, len(RETRY_WAITS)) - 1])
+    raise RuntimeError(f"無法取得 {url}")
+
+
+def get_text(url: str, encoding: str = "utf-8", data=None, retries: int = len(RETRY_WAITS) + 1):
+    """取得網頁或 CSV 文字（data 有值時用 POST）；找不到（404）回傳 None"""
+    headers = {"User-Agent": "Mozilla/5.0 (twse-daily-archiver)"}
+    for attempt in range(1, retries + 1):
+        try:
+            r = (requests.post(url, data=data, headers=headers, timeout=60) if data
+                 else requests.get(url, headers=headers, timeout=120))
+            if r.status_code == 404:
+                return None
+            r.raise_for_status()
+            return r.content.decode(encoding, errors="replace")
         except Exception as e:  # noqa: BLE001
             print(f"  第 {attempt} 次失敗：{e}")
             if attempt < retries:
@@ -362,6 +384,115 @@ def disposition(day: dt.date):
                         startDate=f"{day:%Y%m%d}", endDate=f"{day:%Y%m%d}")
 
 
+def day_trading(day: dt.date):
+    """TWTB4U 當日沖銷交易標的：個股當沖成交股數與買進、賣出金額（2017 年以前可以當沖的股票較少）"""
+    js = query("dayTrading/TWTB4U", date=f"{day:%Y%m%d}", selectType="All")
+    if js is None:
+        return []
+    fields, data = table(js, "證券代號")
+    return [{f: (v.strip() if i < 3 else num(v)) for i, (f, v) in enumerate(zip(fields, r))} for r in data]
+
+
+# 信用額度總量管制餘額表：前半是融券（跟 MI_MARGN 相同）、後半是借券賣出，欄位同名，只能依位置對應；單位：股
+SBL_COLS = ["代號", "名稱",
+            "融券前日餘額", "融券賣出", "融券買進", "融券現券", "融券今日餘額", "融券次一營業日限額",
+            "借券賣出前日餘額", "借券賣出當日賣出", "借券賣出當日還券", "借券賣出當日調整", "借券賣出當日餘額",
+            "借券賣出次一營業日可限額", "備註"]
+
+
+def sbl_short(day: dt.date):
+    """TWT93U 信用額度總量管制餘額表：個股借券賣出餘額（晚上才公布）"""
+    js = query("marginTrading/TWT93U", date=f"{day:%Y%m%d}")
+    if js is None:
+        return []
+    fields, data = table(js, "代號")
+    if len(fields) != len(SBL_COLS):
+        raise RuntimeError(f"借券賣出欄位數變了（{len(fields)} 欄）：{fields}")
+    return [{c: (v.strip() if c in ("代號", "名稱", "備註") else num(v)) for c, v in zip(SBL_COLS, r)} for r in data]
+
+
+SHAREHOLDING_COLS = ["證券代號", "持股分級", "人數", "股數", "占集保庫存數比例%"]
+
+
+def shareholding():
+    """集保戶股權分散表（最新一週）-> (資料日期, rows)。
+    原始檔含上櫃、興櫃與權證約 4,000 檔，只留最新行情裡有的上市股票與 ETF（約 1,300 檔）"""
+    rows = list(csv.DictReader(get_text(TDCC, "utf-8-sig").splitlines()))
+    if not rows:
+        raise RuntimeError("集保戶股權分散表是空的")
+    day = parse_date(rows[0]["資料日期"])
+    with max((DATA_DIR / "stock_day_all").glob("*/*.csv")).open(encoding="utf-8-sig", newline="") as f:
+        listed = {r["Code"] for r in csv.DictReader(f)}
+    keep = []
+    for r in rows:
+        r["證券代號"] = r["證券代號"].strip()
+        if r["證券代號"] in listed:
+            keep.append({c: r[c] for c in SHAREHOLDING_COLS})
+    return day.isoformat(), keep
+
+
+def html_cells(row: str):
+    """一列 HTML 表格 -> 各格文字"""
+    cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, re.S | re.I)
+    return [" ".join(re.sub(r"<[^>]+>|&nbsp;", " ", c).split()) for c in cells]
+
+
+REVENUE_COLS = ["出表日期", "資料年月", "公司代號", "公司名稱", "產業別",
+                "營業收入-當月營收", "營業收入-上月營收", "營業收入-去年當月營收",
+                "營業收入-上月比較增減(%)", "營業收入-去年同月增減(%)",
+                "累計營業收入-當月累計營收", "累計營業收入-去年累計營收", "累計營業收入-前期比較增減(%)", "備註"]
+
+
+def monthly_revenue_history(month: str):
+    """公開資訊觀測站的上市公司月營收彙總表（回補用）-> OpenAPI t187ap05_L 格式；還沒公布回傳 []。
+    month 如 '2016-01'；國內公司（_0）、國外公司（_1，KY 股）分兩頁，每頁依產業分成好幾張表"""
+    y, m = map(int, month.split("-"))
+    rows = []
+    for kind in (0, 1):
+        html = get_text(f"{MOPS}/nas/t21/sii/t21sc03_{y - 1911}_{m}_{kind}.html", "big5")
+        time.sleep(PAUSE)
+        for block in re.split(r"產業別：", html or "")[1:]:
+            industry = block.split("<", 1)[0].strip()
+            for tr in re.findall(r"<tr align=right>(.*?)</tr>", block, re.S | re.I):
+                cells = html_cells(tr)
+                if len(cells) != 11 or not cells[0].isalnum():
+                    continue   # 合計列
+                rows.append(dict(zip(REVENUE_COLS, ["", f"{y - 1911}{m:02d}", cells[0], cells[1], industry,
+                                                    *map(num, cells[2:10]), cells[10]])))
+    return rows
+
+
+def income_statement(year: int, season: int):
+    """公開資訊觀測站綜合損益表彙總（上市）。year 為西元年。
+    金額單位千元，都是當年累計（第 2 季是上半年合計）；各業別欄位不同，合併成同一張表。還沒有資料回傳 []"""
+    html = get_text(f"{MOPS}/mops/web/ajax_t163sb04", data={
+        "encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "isQuery": "Y",
+        "TYPEK": "sii", "year": year - 1911, "season": f"{season:02d}"})
+    time.sleep(PAUSE)
+    rows = []
+    for tb in re.findall(r"<table class='hasBorder'.*?</table>", html or "", re.S):
+        head = re.search(r"<tr class='tblHead'>(.*?)</tr>", tb, re.S)
+        heads = html_cells(head.group(1)) if head else []
+        for tr in re.findall(r"<tr class='(?:even|odd)'>(.*?)</tr>", tb, re.S):
+            cells = html_cells(tr)
+            if len(cells) == len(heads) > 2:
+                rows.append({"公司代號": cells[0], "公司名稱": cells[1],
+                             **{h: num(v) for h, v in zip(heads[2:], cells[2:])}})
+    return rows
+
+
+def recent_quarters(n=2):
+    """最近 n 個已結束的季度 [(年, 季), ...]：季報在季度結束後一個半月內陸續公布，每次都重查"""
+    y, q = TODAY.year, (TODAY.month - 1) // 3   # 本季的前一季
+    out = []
+    for _ in range(n):
+        if q == 0:
+            y, q = y - 1, 4
+        out.append((y, q))
+        q -= 1
+    return out
+
+
 def ex_rights_forecast():
     """TWT48U 除權除息預告表（目前公告、尚未除權息的）"""
     js = query("exRight/TWT48U")
@@ -406,7 +537,13 @@ DATASETS = {
     "disposition":      {"by_day": disposition, "fields": DISPOSITION_COLS, "refresh": True},
     "ex_rights":        {"by_range": ex_rights},      # 除權除息計算結果（查最近 14 天，晚公布的也抓得到）
     "ex_rights_forecast": {"snapshot": ex_rights_forecast},  # 除權除息預告（只保留最新一份）
-    "monthly_revenue":  {"url": OPENAPI + "/opendata/t187ap05_L", "mode": "monthly"},               # 月營收
+    "day_trading":      {"by_day": day_trading},      # 個股當日沖銷成交量值
+    "sbl_short":        {"by_day": sbl_short},        # 借券賣出餘額（晚上才公布，多半隔天補上）
+    # 月營收：OpenAPI 只有最新一個月，月初公司陸續申報，內容有變就覆寫；歷史月份由 backfill.py 從公開資訊觀測站補
+    "monthly_revenue":  {"url": OPENAPI + "/opendata/t187ap05_L", "mode": "monthly", "history": monthly_revenue_history},
+    # 下面兩個不是證交所的網站，連不上時只顯示警告、不算失敗，下次執行再試
+    "income_statement": {"by_quarter": income_statement, "optional": True},   # 季報綜合損益表（當年累計）
+    "shareholding":     {"weekly": shareholding, "optional": True},           # 集保戶股權分散表（每週）
     "holiday_schedule": {"url": OPENAPI + "/holidaySchedule/holidaySchedule", "mode": "snapshot"},  # 休市日程
 }
 
@@ -417,15 +554,17 @@ def recent_trading_days():
     return days[-LOOKBACK:]
 
 
-def same_rows(out: Path, rows) -> bool:
-    """已存的檔案內容是否跟 rows 相同（不管順序：三大法人買賣超相同的股票，每次查詢的排列順序可能不同）"""
+def same_rows(out: Path, rows, ignore=None) -> bool:
+    """已存的檔案內容是否跟 rows 相同（不管順序：三大法人買賣超相同的股票，每次查詢的排列順序可能不同）；
+    ignore 可指定不比較的欄位"""
     with out.open(encoding="utf-8-sig", newline="") as f:
         old = list(csv.reader(f))
     fields = list(dict.fromkeys(k for r in rows for k in r))
     if old[:1] != [fields] and rows:
         return False
-    new = [[str(r.get(k, "")) for k in fields] for r in rows]
-    return sorted(old[1:]) == sorted(new)
+    keep = [i for i, k in enumerate(fields) if k != ignore]
+    new = [[str(r.get(fields[i], "")) for i in keep] for r in rows]
+    return sorted([row[i] for i in keep] for row in old[1:]) == sorted(new)
 
 
 def fetch_by_day(name, cfg):
@@ -458,7 +597,28 @@ def fetch_openapi(name, cfg):
     else:
         groups = group_rows(rows, MONTH_KEYS, parse_month, None)
     for key in sorted(groups):
-        save(name, key, groups[key])
+        out = out_path(name, key)
+        if cfg["mode"] == "monthly" and out.exists():
+            # 月營收月初陸續申報：已存的月份多了公司或數字更正就覆寫（出表日期每天不同，不算）
+            if same_rows(out, groups[key], ignore="出表日期"):
+                print(f"  {key} 內容沒有變")
+            else:
+                save(name, key, groups[key], overwrite=True)
+        else:
+            save(name, key, groups[key])
+
+
+def fetch_by_quarter(name, cfg):
+    for year, season in recent_quarters():
+        key = f"{year}-Q{season}"
+        out = out_path(name, key)
+        rows = cfg["by_quarter"](year, season)
+        if not rows:
+            print(f"  {key} 還沒有資料")
+        elif out.exists() and same_rows(out, rows):
+            print(f"  {key} 內容沒有變")
+        else:
+            save(name, key, rows, overwrite=True)
 
 
 def main() -> int:
@@ -480,6 +640,11 @@ def main() -> int:
                     for key, rows in sorted(cfg["by_month"](day).items()):
                         if not out_path(name, key).exists():
                             save(name, key, rows)
+            elif "by_quarter" in cfg:
+                fetch_by_quarter(name, cfg)
+            elif "weekly" in cfg:
+                key, rows = cfg["weekly"]()
+                save(name, key, rows)
             elif "by_range" in cfg:
                 groups = cfg["by_range"](TODAY - dt.timedelta(days=14), TODAY)
                 if not groups:
@@ -490,6 +655,9 @@ def main() -> int:
                 fetch_openapi(name, cfg)
                 time.sleep(1)
         except Exception as e:  # noqa: BLE001
+            if cfg.get("optional"):
+                print(f"  警告：{e}（下次執行再試）")
+                continue
             print(f"  失敗：{e}")
             failed.append(name)
     if failed:

@@ -30,7 +30,8 @@ function chartOptions() {
     leftPriceScale: { borderVisible: false },
     // 同步捲動的圖要左右對齊，右側刻度固定寬度（刻度寬度不同時，同一個日期會落在不同的水平位置）
     rightPriceScale: { borderVisible: false, minimumWidth: 80 },
-    timeScale: { borderVisible: false },
+    // 拖曳時最左、最右停在第一筆和最新一筆資料，不會拉出一片空白
+    timeScale: { borderVisible: false, fixLeftEdge: true, fixRightEdge: true },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     localization: { locale: "zh-TW", priceFormatter: (p) => nf(p, 2) },
   };
