@@ -145,6 +145,9 @@ td .reason[aria-expanded="true"] { text-decoration: none; color: var(--muted); }
 tr.detail td { white-space: normal; text-align: left; font-size: 13px; line-height: 1.6; background: var(--grid); padding: 8px 10px; }
 /* 手機上表格會橫向捲動：全文固定在可見範圍內，不跟著表格寬度被切掉 */
 tr.detail td > div { position: sticky; left: 10px; width: min(100%, calc(100vw - 92px)); }
+/* 個股頁：成交金額低的訊號、統計表的比較基準列 */
+tr.thin td { color: var(--muted); }
+tr.base td { border-top: 1px solid var(--line); color: var(--muted); }
 .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; margin-left: 4px; vertical-align: 1px; }
 h3.gap { margin-top: 16px; }
 .badges { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 0; }

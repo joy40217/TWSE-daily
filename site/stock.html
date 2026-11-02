@@ -39,6 +39,7 @@
         <div class="tabs" role="group" aria-label="疊加指標">
           <button type="button" data-overlay="ma" class="on" aria-pressed="true">均線</button>
           <button type="button" data-overlay="bb" aria-pressed="false">布林通道</button>
+          <button type="button" data-overlay="ev" class="on" aria-pressed="true">事件</button>
         </div>
         <div class="ranges" role="group" aria-label="顯示範圍">
           <button type="button" data-range="63">3 月</button>
@@ -56,7 +57,10 @@
       <div class="chart chart-ind" id="chart-ind"></div>
       <p class="note" id="ind-note"></p>
       <p class="note">均線：<span class="ma5">MA5</span>　<span class="ma20">MA20</span>　<span class="ma60">MA60</span>　<span class="ma100">MA100</span>；
-        <span class="bb">布林通道</span>為 20 日均線 ± 2 個標準差；「除」標記為除權息日。
+        <span class="bb">布林通道</span>為 20 日均線 ± 2 個標準差；「除」標記為除權息日；
+        「事件」標記<span class="trust">注意股</span>（小點）、<span class="up">處置</span>開始日、無成交（標在前一個交易日）。<br>
+        還原權息價：除權息日以前的價格依參考價往下調，K 線和指標不會因為配息配股出現假的下跌；最新一天等於實際價格，
+        但以前的價格、均線會跟看盤軟體不同，要對照實際成交價請切到「原始價格」。
         還原權息只處理除權息，減資、面額變更（例如股票分割）的日子會有跳空。</p>
     </section>
 
@@ -79,7 +83,7 @@
         <div class="tabs" id="value-tabs" role="group" aria-label="指標"></div>
       </div>
       <div class="chart chart-sm" id="chart-value"></div>
-      <p class="note">虧損時沒有本益比。</p>
+      <p class="note" id="value-note">虧損時沒有本益比。</p>
     </section>
 
     <section class="panel" id="panel-rev">
@@ -91,12 +95,14 @@
 
     <section class="grid">
       <div class="panel" id="signals"></div>
+      <div class="panel" id="signal-stats"></div>
+      <div class="panel" id="events"></div>
       <div class="panel" id="ex-rights"></div>
     </section>
   </main>
 
   <footer class="wrap foot">
-    資料來源：臺灣證券交易所。技術訊號以還原權息收盤價計算，條件與收盤報告相同。
+    資料來源：臺灣證券交易所。技術訊號以還原權息收盤價計算，條件與收盤報告相同，但也列出成交金額不到 1 億的日子。
     本頁僅為資料整理，不構成任何投資建議。<br>
     圖表使用 <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a> 的 Lightweight Charts™。
   </footer>
