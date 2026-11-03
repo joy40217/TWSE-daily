@@ -1,6 +1,7 @@
 *.db
 __pycache__/
 .venv/
+.claude/
 site/data/index.json
 site/data/stocks/
 site/data/stocks.json
