@@ -1,4 +1,4 @@
-# twse-daily
+# TWSE-daily
 
 每個交易日由 GitHub Actions 自動抓取臺灣證交所資料，存成 CSV 累積歷史資料，
 並可在本機匯入 SQLite、產生還原權息日 K 做技術分析。
