@@ -1,7 +1,7 @@
 # TWSE-daily
 
-每個交易日由 GitHub Actions 自動抓取臺灣證交所資料，存成 CSV 累積歷史資料，
-並可在本機匯入 SQLite、產生還原權息日 K 做技術分析。
+每個交易日由 GitHub Actions 自動抓取臺灣證交所（上市）與櫃買中心（上櫃）資料，存成 CSV 累積歷史資料，
+並可在本機匯入 SQLite、產生還原權息日 K 做技術分析。收盤報告只有上市；個股頁上市、上櫃都有。
 
 ## 資料集
 
@@ -22,8 +22,31 @@
 | `sbl_short/` | 借券賣出餘額（含融券，單位：股） | [信用額度總量管制餘額表](https://www.twse.com.tw/zh/trading/margin/twt93u.html) |
 | `monthly_revenue/` | 上市公司月營收（依資料年月存檔） | [OpenAPI](https://openapi.twse.com.tw/) 上市公司每月營業收入彙總表；歷史月份從[公開資訊觀測站](https://mopsov.twse.com.tw/nas/t21/sii/t21sc03_115_9_0.html)回補 |
 | `income_statement/` | 季報綜合損益表（`<年>-Q<季>.csv`，金額千元，當年累計） | [公開資訊觀測站](https://mopsov.twse.com.tw/mops/web/t163sb04) 綜合損益表彙總 |
-| `shareholding/` | 集保戶股權分散表（每週一份，只留上市股票與 ETF） | [集保結算所開放資料](https://opendata.tdcc.com.tw/) 集保戶股權分散表 |
+| `shareholding/` | 集保戶股權分散表（每週一份，只留上市、上櫃股票與 ETF） | [集保結算所開放資料](https://opendata.tdcc.com.tw/) 集保戶股權分散表 |
 | `holiday_schedule/` | 休市日程（只保留最新一份） | [OpenAPI](https://openapi.twse.com.tw/) 有價證券集中交易市場開（休）市日期 |
+
+上櫃股票來自櫃買中心，資料夾名稱是對應的上市資料集加上 `tpex_`，**欄位都轉成跟上市版相同的格式**
+（例如 `tpex_stock_day_all/` 跟 `stock_day_all/` 一樣是 `Date, Code, Name, ...`），更新與覆寫規則也相同：
+
+| 資料夾 | 內容 | 櫃買中心報表 |
+|---|---|---|
+| `tpex_stock_day_all/` | 上櫃個股日成交（不含權證） | [上櫃股票行情](https://www.tpex.org.tw/zh-tw/mainboard/trading/info/pricing.html) |
+| `tpex_bwibbu_all/` | 本益比 / 殖利率 / 淨值比 | [個股本益比、殖利率、股價淨值比](https://www.tpex.org.tw/zh-tw/mainboard/trading/info/daily-pe.html) |
+| `tpex_margin/` | 融資融券 | [融資融券餘額表](https://www.tpex.org.tw/zh-tw/mainboard/trading/margin-trading/transactions.html) |
+| `tpex_institutional/` | 三大法人買賣超（不含權證） | 三大法人買賣明細資訊 |
+| `tpex_notice/` | 注意股 | [上櫃公布注意有價證券](https://www.tpex.org.tw/zh-tw/announcement/mainboard/attention.html) |
+| `tpex_disposition/` | 處置股（當天在處置期間內的股票） | [上櫃處置有價證券](https://www.tpex.org.tw/zh-tw/announcement/mainboard/disposal.html) |
+| `tpex_index/` | 櫃買指數日 K | [櫃買指數（月查詢）](https://www.tpex.org.tw/zh-tw/indices/stock-index/industrial/inxh.html) |
+| `tpex_ex_rights/` | 除權除息計算結果 | [除權除息計算結果表](https://www.tpex.org.tw/zh-tw/announce/market/ex/cal.html) |
+| `tpex_ex_rights_forecast/` | 除權除息預告（只保留最新一份） | [OpenAPI](https://www.tpex.org.tw/openapi/) 上櫃股票除權除息預告表 |
+| `tpex_day_trading/` | 當日沖銷成交股數與買賣金額 | [現股當沖交易統計資訊](https://www.tpex.org.tw/zh-tw/mainboard/trading/day-trading/statistics/day.html) |
+| `tpex_sbl_short/` | 借券賣出餘額（含融券，單位：股） | [融券借券賣出餘額](https://www.tpex.org.tw/zh-tw/mainboard/trading/margin-trading/sbl.html) |
+| `tpex_monthly_revenue/` | 上櫃公司月營收 | [OpenAPI](https://www.tpex.org.tw/openapi/) 上櫃公司每月營業收入彙總表；歷史月份從[公開資訊觀測站](https://mopsov.twse.com.tw/nas/t21/otc/t21sc03_115_9_0.html)回補 |
+| `tpex_income_statement/` | 上櫃季報綜合損益表 | [公開資訊觀測站](https://mopsov.twse.com.tw/mops/web/t163sb04) 綜合損益表彙總（上櫃） |
+
+櫃買中心的交易日跟證交所相同，所以也用加權指數的日期判斷要查哪幾天。
+上櫃三大法人的同名欄位依位置對應（外資自營商分開列以前 16 欄、之後 24 欄），外資合計等上市沒有的欄位不存；
+處置期間的「~」改成上市用的「～」，除權息的「除息」改成上市用的「息」。
 
 檔案路徑為 `data/<資料夾>/<年>/<日期>.csv`，例如 `data/stock_day_all/2026/2026-10-29.csv`；
 日期是資料本身的交易日，假日不會產生檔案。已存在的檔案通常不會被覆寫，但以下資料集最近 2 個交易日每次都重新查、有資料就覆寫：
@@ -39,10 +62,10 @@
 - 季報：每次重查最近兩季（季報在季度結束後一個半月內陸續公布），內容有變就覆寫
 - 集保股權分散：每週一份，開放資料只提供最新一週，**沒有辦法回補**，從開始抓的那週起累積
 
-證交所的資料都是用網站的查詢功能依日期抓取，收盤後當天就有資料，
-欄位也轉成跟 OpenAPI 相同的格式。OpenAPI 的每日行情要到隔天才更新，
-所以只用在月營收、休市日程這類沒有日期問題的資料。
-季報和集保不是證交所的網站，連不上時只顯示警告、不算抓取失敗，下次執行再試。
+證交所、櫃買中心的資料都是用網站的查詢功能依日期抓取，收盤後當天就有資料，
+欄位也轉成跟證交所 OpenAPI 相同的格式。OpenAPI 的每日行情要到隔天才更新，
+所以只用在月營收、休市日程、上櫃除權息預告這類沒有日期問題的資料。
+季報（上市、上櫃）和集保不是證交所的網站，連不上時只顯示警告、不算抓取失敗，下次執行再試。
 
 ## 設定步驟
 
@@ -132,7 +155,9 @@
 - 當日除權息股票
 - 表格裡的股票代號、名稱可以點，右上角也能輸入代號或名稱查個股
 
-個股頁（`stock.html#2330`）包含：
+報告的大盤、排行、技術訊號都只有上市股票；上櫃股票只出現在個股頁。
+
+個股頁（`stock.html#2330`，上市、上櫃都有；上櫃股票的相對強弱比櫃買指數、Yahoo 連結是 `.TWO`）包含：
 
 - 日 K 線（可切換還原權息 / 原始價格，說明列會標出目前是哪一種；含 MA5 / MA20 / MA60 / MA100、布林通道、除權息標記，
   以及可關閉的事件標記：注意股、處置開始日、無成交）
@@ -165,7 +190,7 @@
 |---|---|
 | `data/latest.json` | 最新交易日 `date`、產生時間 `generated_at`、各資料是否已公布 `available`（例如 `margin: false` 表示融資融券還沒出來）、除權息預告 |
 | `data/days/<年>/<日期>.json` | 單日報告：大盤、三大法人、融資融券、排行、類股、注意 / 處置股、技術訊號 |
-| `data/summary/<代號>.json` | 個股摘要（約 3 KB）：最新行情、均線（還原 `ma` 與原始 `ma_raw`）、60 日高低（還原收盤 `high_60` / `low_60` 與原始盤中 `range_60`）、風險指標 `risk`（ATR、波動率、回檔、相對大盤）、三大法人與連買連賣天數、5 / 20 日法人合計、融資融券與融資使用率、當沖比率 `day_trading`、借券賣出 `sbl_short`、千張大戶 `shareholding`、最新一季財報 `financials`、本益比、月營收（年增、月增、累計）、注意 / 處置、除權息預告、最近 20 天走勢；`basis` 欄位說明哪些數字用還原權息價 |
+| `data/summary/<代號>.json` | 個股摘要（約 3 KB，上市、上櫃都有，`market` 標示是哪一個）：最新行情、均線（還原 `ma` 與原始 `ma_raw`）、60 日高低（還原收盤 `high_60` / `low_60` 與原始盤中 `range_60`）、風險指標 `risk`（ATR、波動率、回檔、相對大盤；`rs_index` 是比較的指數）、三大法人與連買連賣天數、5 / 20 日法人合計、融資融券與融資使用率、當沖比率 `day_trading`、借券賣出 `sbl_short`、千張大戶 `shareholding`、最新一季財報 `financials`、本益比、月營收（年增、月增、累計）、注意 / 處置、除權息預告、最近 20 天走勢；`basis` 欄位說明哪些數字用還原權息價 |
 
 建議任務先讀 `latest.json`，確認 `date` 是當天、需要的資料 `available` 為 true，再讀其他檔案，
 避免把前一天的數字當成今天的。自選股清單放在任務那一端就好：每一檔股票都有摘要，
@@ -174,7 +199,7 @@
 有設定 `DISCORD_WEBHOOK_URL` 的話，每天產生新報告時會送一則摘要和大盤 K 線圖到 Discord，附上網頁連結。
 
 > **注意**：GitHub Pages 網站是公開的，就算 repo 設為私有也一樣，任何知道網址的人都看得到。
-> 報告內容只有證交所的公開資料，但不要把個人持股之類的資訊放進報告。
+> 報告內容只有證交所、櫃買中心等機構的公開資料，但不要把個人持股之類的資訊放進報告。
 
 每天的報告存在 `site/data/days/<年>/<日期>.json`；回補歷史資料後，下次產生報告時會自動補上那些日子的報告。
 個股頁的資料（`site/data/stocks/<代號>.json`，每檔一個）、個股摘要與 `latest.json` 每次發布時從 CSV 重新產生，不進 git；
@@ -195,12 +220,16 @@
     python scripts/backfill.py 2025-01-01 2025-12-31          # 指定區間
     python scripts/backfill.py 2025-01-01 --only institutional,margin   # 只補部分資料集
 
-- 可回補上表中所有「網站」來源的資料集，以及從公開資訊觀測站回補月營收、季報（`--only monthly_revenue,income_statement`，
-  2016 年起約 20 分鐘）；集保股權分散沒有歷史資料可補。格式跟每日抓的完全相同
+- 可回補上表中所有「網站」來源的資料集（上市與 `tpex_` 開頭的上櫃），以及從公開資訊觀測站回補月營收、季報
+  （`--only monthly_revenue,income_statement`，2016 年起約 20 分鐘；上櫃是 `tpex_monthly_revenue,tpex_income_statement`）；
+  集保股權分散、除權息預告沒有歷史資料可補。格式跟每日抓的完全相同
 - 已存在的檔案會略過，中斷後重跑即可接著補
-- 每次查詢間隔 3 秒，連續失敗 5 次（多半是被證交所暫時封鎖）會自動停止
-- 每次查詢連同等待約 5～6 秒；每個交易日要查 10 個資料集，一年約 3 小時 25 分～4 小時、約 100 MB（git 壓縮後約一半以下）
-- workflow 單次上限 350 分鐘，**一次補一年**；逾時被中止時不保證會提交，快到上限還沒跑完就手動取消（取消會先提交已補的部分），再用同樣設定重跑接著補
+- 每次查詢間隔 3 秒，連續失敗 5 次（多半是被證交所、櫃買中心暫時封鎖）會自動停止
+- 上市：每次查詢連同等待約 5～6 秒；每個交易日要查 10 個資料集，一年約 3 小時 25 分～4 小時、約 100 MB（git 壓縮後約一半以下）
+- 上櫃：`--only tpex`（workflow 的 `only` 填 `tpex`）代表全部上櫃資料集。櫃買中心回應較快，
+  每個交易日 8 個資料集約 30 秒，一年約 2 小時，**一次可以補兩年**
+- `only` 留空會上市、上櫃一起補，一年約 5.5～6 小時，超過上限，**上市、上櫃要分開補**
+- workflow 單次上限 350 分鐘，上市**一次補一年**；逾時被中止時不保證會提交，快到上限還沒跑完就手動取消（取消會先提交已補的部分），再用同樣設定重跑接著補
 - 已經補過的年份只要補新增的資料集：`--only institutional_amount,sector_index,notice,disposition`，一年約 1 小時 20 分～1 小時 40 分，一次最多補三年
 - 當沖、借券賣出（`--only day_trading,sbl_short`）：一年約 40～50 分鐘，一次可以補五、六年
 - 2015 年 6 月起漲跌幅改為 10%，技術分析建議從這之後開始補
@@ -209,25 +238,28 @@
 
     python scripts/check_rwd.py
 
-或在 Actions 分頁手動執行「檢查證交所網站端點」。GitHub 主機在國外，兩邊結果可能不同。
+或在 Actions 分頁手動執行「檢查證交所網站端點」（也會檢查櫃買中心）。GitHub 主機在國外，兩邊結果可能不同。
 
 ### 轉成 SQLite 分析
 
     python scripts/build_db.py
 
 會在本機產生 `twse.db`（不會進 git）。每個資料夾一張表，欄位都存成文字，另有 `_key` 欄是日期；
-`stock_day_adj` 是整理好的日 K，價格已轉成數字並附上還原權息價格（adj_open / adj_high / adj_low / adj_close）。
+`stock_day_adj` 是整理好的上市、上櫃日 K，價格已轉成數字並附上還原權息價格（adj_open / adj_high / adj_low / adj_close），
+`market` 欄是「上市」或「上櫃」；上櫃轉上市的股票代號不變，兩邊的日 K 接在一起。
 
     SELECT date, adj_open, adj_high, adj_low, adj_close, volume
     FROM stock_day_adj WHERE code = '2330' ORDER BY date;
 
-還原權息只處理除權息；減資、面額變更不在 `ex_rights` 裡，這些股票的還原價在事件當天會有跳空。
+還原權息只處理除權息；減資、面額變更不在 `ex_rights`、`tpex_ex_rights` 裡，這些股票的還原價在事件當天會有跳空。
 
 ## 新增資料集
 
 在 `scripts/fetch.py` 的 `DATASETS` 加一行：
 
-- 網站來源、每天一份：寫一個 `函式(日期) -> list[dict]`，登記為 `{"by_day": 函式}`，回補也會自動支援
+- 網站來源、每天一份：寫一個 `函式(日期) -> list[dict]`，登記為 `{"by_day": 函式}`，回補也會自動支援；
+  一次一個月（`{"by_month": 函式}`）、一段期間（`{"by_range": 函式}`）的也一樣
+- 上櫃版本用 `tpex_` 加上市資料集的名稱、欄位轉成跟上市版相同，個股頁（`stock_data.py`）就會自動合在一起
 - OpenAPI 來源：登記為 `{"url": ..., "mode": "monthly" 或 "snapshot"}`
 - 每季一份：寫一個 `函式(年, 季) -> list[dict]`，登記為 `{"by_quarter": 函式}`；每週只有最新一份：`{"weekly": 函式}`，函式回傳 `(日期, rows)`
 - 不是證交所的來源可加上 `"optional": True`，連不上時只顯示警告

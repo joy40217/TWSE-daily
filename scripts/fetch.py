@@ -6,7 +6,10 @@
       注意股、處置股、除權息預告、當日沖銷、借券賣出
   OpenAPI：只有最新一份，而且每日行情要到隔天才更新，只用在沒有日期問題的資料
     → 月營收、休市日程
-  公開資訊觀測站（mopsov.twse.com.tw）：季報綜合損益表；歷史月營收（回補用）
+  櫃買中心網站（www.tpex.org.tw/www/zh-tw）：上櫃的行情、本益比、融資融券、三大法人、注意股、處置股、
+      當日沖銷、借券賣出、除權息、櫃買指數；OpenAPI：上櫃月營收、除權息預告
+      → 資料集名稱加 tpex_ 前綴，欄位轉成對應的上市資料集格式
+  公開資訊觀測站（mopsov.twse.com.tw）：上市、上櫃季報綜合損益表；歷史月營收（回補用）
   集保結算所開放資料：集保戶股權分散表（每週一份，只能取得最新一週，從開始抓的那週起累積）
 
 網站資料一律轉成跟 OpenAPI 相同的欄位格式，新舊檔案可以混用。
@@ -20,6 +23,7 @@ import re
 import sys
 import time
 from collections import defaultdict
+from functools import partial
 from pathlib import Path
 
 import requests
@@ -27,6 +31,8 @@ import urllib3
 
 OPENAPI = "https://openapi.twse.com.tw/v1"
 RWD = "https://www.twse.com.tw/rwd/zh"
+TPEX = "https://www.tpex.org.tw/www/zh-tw"
+TPEX_OPENAPI = "https://www.tpex.org.tw/openapi/v1"
 MOPS = "https://mopsov.twse.com.tw"
 TDCC = "https://opendata.tdcc.com.tw/getOD.ashx?id=1-5"
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -194,7 +200,7 @@ def save(name: str, key: str, rows, overwrite=False) -> None:
 def num(s) -> str:
     """'2,425.00' -> '2425.00'；'--'、'-' 等無資料 -> ''"""
     s = str(s).strip()
-    return "" if s in ("", "-", "--", "---") else s.replace(",", "")
+    return "" if re.fullmatch(r"-*", s) else s.replace(",", "")
 
 
 def count(s) -> str:
@@ -204,9 +210,12 @@ def count(s) -> str:
 
 
 def ratio(s) -> str:
-    """比率為 0（如 '0.00'）時 OpenAPI 給空白，這裡比照辦理"""
+    """比率為 0（如 '0.00'）時 OpenAPI 給空白，這裡比照辦理；'N/A' 之類的文字也給空白"""
     n = num(s)
-    return n if n and float(n) != 0 else ""
+    try:
+        return n if n and float(n) != 0 else ""
+    except ValueError:
+        return ""
 
 
 def roc(day: dt.date) -> str:
@@ -416,13 +425,17 @@ SHAREHOLDING_COLS = ["證券代號", "持股分級", "人數", "股數", "占集
 
 def shareholding():
     """集保戶股權分散表（最新一週）-> (資料日期, rows)。
-    原始檔含上櫃、興櫃與權證約 4,000 檔，只留最新行情裡有的上市股票與 ETF（約 1,300 檔）"""
+    原始檔含興櫃與權證約 4,000 檔，只留最新行情裡有的上市、上櫃股票與 ETF（約 2,200 檔）"""
     rows = list(csv.DictReader(get_text(TDCC, "utf-8-sig").splitlines()))
     if not rows:
         raise RuntimeError("集保戶股權分散表是空的")
     day = parse_date(rows[0]["資料日期"])
-    with max((DATA_DIR / "stock_day_all").glob("*/*.csv")).open(encoding="utf-8-sig", newline="") as f:
-        listed = {r["Code"] for r in csv.DictReader(f)}
+    listed = set()
+    for name in ("stock_day_all", "tpex_stock_day_all"):
+        files = list((DATA_DIR / name).glob("*/*.csv"))
+        if files:
+            with max(files).open(encoding="utf-8-sig", newline="") as f:
+                listed |= {r["Code"] for r in csv.DictReader(f)}
     keep = []
     for r in rows:
         r["證券代號"] = r["證券代號"].strip()
@@ -443,13 +456,14 @@ REVENUE_COLS = ["出表日期", "資料年月", "公司代號", "公司名稱", 
                 "累計營業收入-當月累計營收", "累計營業收入-去年累計營收", "累計營業收入-前期比較增減(%)", "備註"]
 
 
-def monthly_revenue_history(month: str):
-    """公開資訊觀測站的上市公司月營收彙總表（回補用）-> OpenAPI t187ap05_L 格式；還沒公布回傳 []。
-    month 如 '2016-01'；國內公司（_0）、國外公司（_1，KY 股）分兩頁，每頁依產業分成好幾張表"""
+def monthly_revenue_history(month: str, market: str = "sii"):
+    """公開資訊觀測站的月營收彙總表（回補用）-> OpenAPI t187ap05_L 格式；還沒公布回傳 []。
+    month 如 '2016-01'；market 是 sii（上市）或 otc（上櫃）；
+    國內公司（_0）、國外公司（_1，KY 股）分兩頁，每頁依產業分成好幾張表"""
     y, m = map(int, month.split("-"))
     rows = []
     for kind in (0, 1):
-        html = get_text(f"{MOPS}/nas/t21/sii/t21sc03_{y - 1911}_{m}_{kind}.html", "big5")
+        html = get_text(f"{MOPS}/nas/t21/{market}/t21sc03_{y - 1911}_{m}_{kind}.html", "big5")
         time.sleep(PAUSE)
         for block in re.split(r"產業別：", html or "")[1:]:
             industry = block.split("<", 1)[0].strip()
@@ -462,12 +476,12 @@ def monthly_revenue_history(month: str):
     return rows
 
 
-def income_statement(year: int, season: int):
-    """公開資訊觀測站綜合損益表彙總（上市）。year 為西元年。
+def income_statement(year: int, season: int, market: str = "sii"):
+    """公開資訊觀測站綜合損益表彙總。year 為西元年；market 是 sii（上市）或 otc（上櫃）。
     金額單位千元，都是當年累計（第 2 季是上半年合計）；各業別欄位不同，合併成同一張表。還沒有資料回傳 []"""
     html = get_text(f"{MOPS}/mops/web/ajax_t163sb04", data={
         "encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "isQuery": "Y",
-        "TYPEK": "sii", "year": year - 1911, "season": f"{season:02d}"})
+        "TYPEK": market, "year": year - 1911, "season": f"{season:02d}"})
     time.sleep(PAUSE)
     rows = []
     for tb in re.findall(r"<table class='hasBorder'.*?</table>", html or "", re.S):
@@ -521,6 +535,212 @@ def ex_rights(start: dt.date, end: dt.date):
     return group_rows(rows, DAY_KEYS, parse_date, None) if rows else {}
 
 
+# ---- 櫃買中心網站依日期查詢（上櫃），欄位一律轉成上面對應的上市資料集格式，個股頁可以用同一套程式 ----
+
+TPEX_CODE = re.compile(r"\d{4}[A-Z]?|00\d{3,4}[A-Z]?")   # 上櫃股票、特別股與 ETF；行情表裡其他的是權證（約 1 萬檔）
+
+
+def tpex_query(path: str, **params):
+    """查詢櫃買中心網站（www.tpex.org.tw/www/zh-tw/...）；假日、尚未公布時表格是空的，由各函式判斷"""
+    qs = "&".join(f"{k}={v}" for k, v in params.items())
+    js = get_json(f"{TPEX}/{path}?{qs}&response=json")
+    time.sleep(PAUSE)
+    return js if str(js.get("stat", "")).lower() == "ok" else None
+
+
+def tpex_rows(js, first_field: str):
+    """所有第一欄是 first_field 的表（行情表另有一張「管理股票」）合併成 list[dict]，欄位同名的依序加 _2、_3"""
+    rows = []
+    for t in (js or {}).get("tables") or []:
+        fields = t.get("fields") or []
+        if fields[:1] != [first_field]:
+            continue
+        names, seen = [], defaultdict(int)
+        for f in fields:
+            seen[f] += 1
+            names.append(f if seen[f] == 1 else f"{f}_{seen[f]}")
+        rows += [dict(zip(names, r)) for r in t.get("data") or []]
+    return rows
+
+
+def slash(day: dt.date) -> str:
+    return f"{day:%Y/%m/%d}"
+
+
+def change(s) -> str:
+    """'+0.14'、'-3.10 ' -> 跟 stock_day_all 一樣的 '0.1400'、'-3.1000'；除權息、無比價等文字給空白"""
+    m = re.match(r"^([+-]?)(\d+(?:\.\d+)?)$", str(s).strip().replace(",", ""))
+    return f"{'-' if m.group(1) == '-' else ''}{float(m.group(2)):.4f}" if m else ""
+
+
+def tpex_stock_day_all(day: dt.date):
+    """上櫃股票行情（dailyQuotes）-> stock_day_all 格式，去掉權證"""
+    rows = []
+    for f in tpex_rows(tpex_query("afterTrading/dailyQuotes", date=slash(day)), "代號"):
+        code = f["代號"].strip()
+        if not TPEX_CODE.fullmatch(code):
+            continue
+        rows.append({
+            "Date": roc(day), "Code": code, "Name": f["名稱"].strip(),
+            "TradeVolume": count(f["成交股數"]), "TradeValue": count(f["成交金額(元)"]),
+            "OpeningPrice": num(f["開盤"]), "HighestPrice": num(f["最高"]), "LowestPrice": num(f["最低"]),
+            "ClosingPrice": num(f["收盤"]), "Change": change(f["漲跌"]), "Transaction": count(f["成交筆數"]),
+        })
+    return rows
+
+
+def tpex_bwibbu_all(day: dt.date):
+    """上櫃個股本益比、殖利率、股價淨值比（peQryDate）-> bwibbu_all 格式"""
+    return [{"Date": roc(day), "Code": f["股票代號"].strip(), "Name": f["公司名稱"].strip(),
+             "PEratio": ratio(f["本益比"]), "DividendYield": ratio(f["殖利率(%)"]), "PBratio": ratio(f["股價淨值比"])}
+            for f in tpex_rows(tpex_query("afterTrading/peQryDate", date=slash(day)), "股票代號")]
+
+
+# 上櫃融資融券餘額表的欄位 -> margin 的欄位（單位都是張）
+TPEX_MARGIN = {"代號": "股票代號", "名稱": "股票名稱", "資買": "融資買進", "資賣": "融資賣出", "現償": "融資現金償還",
+               "前資餘額(張)": "融資前日餘額", "資餘額": "融資今日餘額", "資限額": "融資限額",
+               "券買": "融券買進", "券賣": "融券賣出", "券償": "融券現券償還",
+               "前券餘額(張)": "融券前日餘額", "券餘額": "融券今日餘額", "券限額": "融券限額",
+               "資券相抵(張)": "資券互抵", "備註": "註記"}
+
+
+def tpex_margin(day: dt.date):
+    """上櫃融資融券餘額（margin/balance）-> margin 格式"""
+    rows = []
+    for f in tpex_rows(tpex_query("margin/balance", date=slash(day)), "代號"):
+        row = {c: f.get(k, "") for k, c in TPEX_MARGIN.items()}
+        for c in MARGIN_COLS[2:-1]:
+            row[c] = count(row[c])
+        row["股票代號"], row["股票名稱"] = row["股票代號"].strip(), row["股票名稱"].strip()
+        rows.append(row)
+    return rows
+
+
+# 上櫃三大法人買賣明細依欄位數對應到 institutional 的欄位：外資自營商分開列以前 16 欄（跟上市舊格式相同、順序也相同），
+# 之後 24 欄（多了外資自營商、外資合計、自營商合計）；None 是外資合計等上市沒有的欄位，不存
+TPEX_INST = {
+    16: ["證券代號", "證券名稱", "外資買進股數", "外資賣出股數", "外資買賣超股數",
+         "投信買進股數", "投信賣出股數", "投信買賣超股數", "自營商買賣超股數",
+         "自營商買進股數(自行買賣)", "自營商賣出股數(自行買賣)", "自營商買賣超股數(自行買賣)",
+         "自營商買進股數(避險)", "自營商賣出股數(避險)", "自營商買賣超股數(避險)", "三大法人買賣超股數"],
+    24: ["證券代號", "證券名稱",
+         "外陸資買進股數(不含外資自營商)", "外陸資賣出股數(不含外資自營商)", "外陸資買賣超股數(不含外資自營商)",
+         "外資自營商買進股數", "外資自營商賣出股數", "外資自營商買賣超股數", None, None, None,
+         "投信買進股數", "投信賣出股數", "投信買賣超股數",
+         "自營商買進股數(自行買賣)", "自營商賣出股數(自行買賣)", "自營商買賣超股數(自行買賣)",
+         "自營商買進股數(避險)", "自營商賣出股數(避險)", "自營商買賣超股數(避險)",
+         None, None, "自營商買賣超股數", "三大法人買賣超股數"],
+}
+# 存檔的欄位順序跟上市 T86 相同（自營商合計在自行買賣前面）
+INST_ORDER = TPEX_INST[24][:8] + TPEX_INST[24][11:14] + ["自營商買賣超股數"] + TPEX_INST[24][14:20] + ["三大法人買賣超股數"]
+
+
+def tpex_institutional(day: dt.date):
+    """上櫃三大法人買賣明細（insti/dailyTrade，不含權證）-> institutional 格式（同名欄位只能依位置對應）"""
+    js = tpex_query("insti/dailyTrade", type="Daily", sect="EW", date=slash(day))
+    for t in (js or {}).get("tables") or []:
+        fields = t.get("fields") or []
+        if fields[:1] != ["代號"]:
+            continue
+        cols = TPEX_INST.get(len(fields))
+        if cols is None:
+            raise RuntimeError(f"上櫃三大法人欄位數變了（{len(fields)} 欄）：{fields}")
+        order = INST_ORDER if len(fields) == 24 else cols
+        rows = []
+        for r in t.get("data") or []:
+            row = {c: (v.strip() if i < 2 else num(v)) for i, (c, v) in enumerate(zip(cols, r)) if c}
+            rows.append({c: row[c] for c in order})
+        return rows
+    return []
+
+
+def tpex_notice(day: dt.date):
+    """上櫃公布注意有價證券（bulletin/attention）-> notice 格式；沒有資料回傳 []，查詢失敗回傳 None。
+    網站的「累計」是當天的總筆數（每一列都一樣），不是個股被列入的次數，所以累計次數留空"""
+    js = tpex_query("bulletin/attention", startDate=slash(day), endDate=slash(day), type="all", order="date")
+    if js is None:
+        return None
+    clean = lambda s: " ".join(re.sub(r"<[^>]+>", " ", str(s)).split())  # noqa: E731
+    return [{"證券代號": f["證券代號"].strip(), "證券名稱": f["證券名稱"].strip(), "累計次數": "",
+             "注意交易資訊": clean(f["注意交易資訊"]), "日期": f["公告日期"], "收盤價": num(f["收盤價"]),
+             "本益比": num(f["本益比"])}
+            for f in tpex_rows(js, "編號") if str(f.get("證券代號", "")).strip()]
+
+
+def tpex_disposition(day: dt.date):
+    """上櫃處置有價證券（bulletin/disposal）：查某一天會列出當天在處置期間內的股票 -> disposition 格式。
+    期間的「~」改成跟上市相同的「～」；名稱後面附的連結去掉"""
+    js = tpex_query("bulletin/disposal", startDate=slash(day), endDate=slash(day),
+                    type="all", reason=-1, measure=-1, order="date")
+    if js is None:
+        return None
+    return [{"證券代號": f["證券代號"].strip(), "證券名稱": re.sub(r"\(.*\)$", "", f["證券名稱"]).strip(),
+             "公布日期": f["公布日期"], "累計": str(f["累計"]), "處置條件": f["處置原因"],
+             "處置起迄時間": f["處置起訖時間"].replace("~", "～"), "處置措施": f["處置措施"]}
+            for f in tpex_rows(js, "編號") if str(f.get("證券代號", "")).strip()]
+
+
+def tpex_day_trading(day: dt.date):
+    """上櫃現股當沖交易統計（intraday/stat）-> day_trading 格式（欄位名稱相同）"""
+    return [{k: (v.strip() if i < 3 else num(v)) for i, (k, v) in enumerate(f.items())}
+            for f in tpex_rows(tpex_query("intraday/stat", type="Daily", date=slash(day)), "證券代號")]
+
+
+def tpex_sbl_short(day: dt.date):
+    """上櫃信用額度總量管制餘額表（margin/sbl）-> sbl_short 格式（欄位順序跟上市相同，單位：股）"""
+    js = tpex_query("margin/sbl", date=slash(day))
+    for t in (js or {}).get("tables") or []:
+        fields = t.get("fields") or []
+        if fields[:1] != ["股票代號"]:
+            continue
+        if len(fields) != len(SBL_COLS):
+            raise RuntimeError(f"上櫃借券賣出欄位數變了（{len(fields)} 欄）：{fields}")
+        return [{c: (v.strip() if c in ("代號", "名稱", "備註") else num(v)) for c, v in zip(SBL_COLS, r)}
+                for r in t.get("data") or []]
+    return []
+
+
+def tpex_index(day: dt.date):
+    """櫃買指數（day 所在月份）-> {'2026-10-01': [row], ...}，跟 taiex 相同格式"""
+    out = {}
+    for f in tpex_rows(tpex_query("indexInfo/inx", date=f"{day:%Y/%m}/01"), "日期"):
+        d = parse_date(f["日期"])
+        out[d.isoformat()] = [{"Date": roc(d), "OpeningIndex": num(f["開市"]), "HighestIndex": num(f["最高"]),
+                               "LowestIndex": num(f["最低"]), "ClosingIndex": num(f["收市"])}]
+    return out
+
+
+def tpex_ex_rights(start: dt.date, end: dt.date):
+    """上櫃除權除息計算結果（bulletin/exDailyQ）-> {'2026-10-16': [...], ...}；
+    代號、名稱改成跟上市相同的欄位名稱，權/息的「除息」改成「息」"""
+    groups = defaultdict(list)
+    for f in tpex_rows(tpex_query("bulletin/exDailyQ", startDate=slash(start), endDate=slash(end)), "除權息日期"):
+        d = parse_date(f.pop("除權息日期"))
+        row = {"資料日期": roc(d), "股票代號": f.pop("代號").strip(), "股票名稱": f.pop("名稱").strip()}
+        row.update({k: (v.removeprefix("除") if k == "權/息" else num(v)) for k, v in f.items()})
+        groups[d.isoformat()].append(row)
+    return groups
+
+
+def tpex_ex_rights_forecast():
+    """上櫃除權除息預告（OpenAPI tpex_exright_prepost）-> ex_rights_forecast 格式"""
+    rows = get_json(TPEX_OPENAPI + "/tpex_exright_prepost")
+    out = []
+    for r in rows:
+        d = parse_date(r["ExRrightsExDividendDate"])
+        out.append({
+            "除權除息日期": d.isoformat() if d else r["ExRrightsExDividendDate"],
+            "股票代號": r["SecuritiesCompanyCode"].strip(),
+            "名稱": r["CompanyName"].strip(),
+            "除權息": r["ExRrightsExDividend"].removeprefix("除"),
+            "無償配股率": num(r["StockDividendRatio"]),
+            "現金增資配股率": num(r["SubscriptionRatioToNewSharesIssued"]),
+            "現金增資認購價": num(r["SubscriptionPricePerShare"]),
+            "現金股利": num(r["CashDividend"]),
+        })
+    return out
+
+
 # 順序有意義：taiex 放第一個，它的日期就是交易日清單，其他逐日資料依此判斷要查哪幾天
 DATASETS = {
     "taiex":            {"by_month": taiex},          # 加權指數日 K
@@ -541,10 +761,26 @@ DATASETS = {
     "sbl_short":        {"by_day": sbl_short},        # 借券賣出餘額（晚上才公布，多半隔天補上）
     # 月營收：OpenAPI 只有最新一個月，月初公司陸續申報，內容有變就覆寫；歷史月份由 backfill.py 從公開資訊觀測站補
     "monthly_revenue":  {"url": OPENAPI + "/opendata/t187ap05_L", "mode": "monthly", "history": monthly_revenue_history},
-    # 下面兩個不是證交所的網站，連不上時只顯示警告、不算失敗，下次執行再試
-    "income_statement": {"by_quarter": income_statement, "optional": True},   # 季報綜合損益表（當年累計）
-    "shareholding":     {"weekly": shareholding, "optional": True},           # 集保戶股權分散表（每週）
     "holiday_schedule": {"url": OPENAPI + "/holidaySchedule/holidaySchedule", "mode": "snapshot"},  # 休市日程
+    # 季報、集保不是證交所的網站，連不上時只顯示警告、不算失敗，下次執行再試
+    "income_statement": {"by_quarter": income_statement, "optional": True},   # 季報綜合損益表（當年累計）
+    # 上櫃（櫃買中心），跟上面對應的上市資料集相同格式與更新規則；交易日跟上市相同，所以也用加權指數的日期
+    "tpex_index":         {"by_month": tpex_index},                              # 櫃買指數日 K
+    "tpex_stock_day_all": {"by_day": tpex_stock_day_all, "refresh": True},
+    "tpex_bwibbu_all":    {"by_day": tpex_bwibbu_all, "refresh": True},
+    "tpex_margin":        {"by_day": tpex_margin, "refresh": True},
+    "tpex_institutional": {"by_day": tpex_institutional, "refresh": True},
+    "tpex_notice":        {"by_day": tpex_notice, "fields": NOTICE_COLS, "refresh": True},
+    "tpex_disposition":   {"by_day": tpex_disposition, "fields": DISPOSITION_COLS, "refresh": True},
+    "tpex_ex_rights":     {"by_range": tpex_ex_rights},
+    "tpex_ex_rights_forecast": {"snapshot": tpex_ex_rights_forecast},
+    "tpex_day_trading":   {"by_day": tpex_day_trading},
+    "tpex_sbl_short":     {"by_day": tpex_sbl_short},
+    "tpex_monthly_revenue": {"url": TPEX_OPENAPI + "/mopsfin_t187ap05_O", "mode": "monthly",
+                             "history": partial(monthly_revenue_history, market="otc")},
+    "tpex_income_statement": {"by_quarter": partial(income_statement, market="otc"), "optional": True},
+    # 放在上市、上櫃行情之後：只留最新行情裡有的股票
+    "shareholding":     {"weekly": shareholding, "optional": True},           # 集保戶股權分散表（每週）
 }
 
 

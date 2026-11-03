@@ -2,9 +2,12 @@
 
 由 report.py 在產生報告時呼叫，每次全部重建、不進 git（GitHub Actions 發布網頁時才產生）。
 
+上市、上櫃股票都有：每個資料集把上市的與對應的上櫃資料集（tpex_ 開頭，欄位相同）合在一起，
+上櫃轉上市的股票會有完整歷史。market 是最後交易日所在的市場（上市 / 上櫃）。
+
 每檔一個 JSON，欄位依日期對齊成陣列（d 是日期，其他陣列的第 i 個值對應 d[i]，沒有資料為 null）：
     o h l c   原始開高低收（還原權息價由網頁用 ex 計算，跟 build_db.py 的算法相同）
-    chg       證交所公布的漲跌價差（除權息日是跟參考價比）
+    chg       證交所、櫃買中心公布的漲跌價差（除權息日是跟參考價比）
     v         成交量（張）          val  成交金額（百萬元）
     fi tr dl  外資、投信、自營商買賣超（張）
     mf ms     融資、融券餘額（張）       ml  融資限額（張）
@@ -64,6 +67,21 @@ def rows_by_code(con, table, code_col, code):
         con.row_factory = None
 
 
+def by_code(con, have, table, code_col, code):
+    """上市資料集與對應的上櫃資料集（tpex_ 開頭，欄位相同）合在一起，{日期或年月: row}；
+    上櫃轉上市的股票兩邊都有，日期不會重疊"""
+    out = {}
+    for t in (table, f"tpex_{table}"):
+        if t in have:
+            out.update(rows_by_code(con, t, code_col, code))
+    return out
+
+
+def query_both(con, have, table, sql, args):
+    """同一個 SQL 查上市、上櫃兩個資料表（sql 裡用 {t} 代表表名）"""
+    return [r for t in (table, f"tpex_{table}") if t in have for r in con.execute(sql.format(t=f'"{t}"'), args)]
+
+
 # 季報欄位：一般業、金融業等欄位名稱不同，依序找第一個有值的（金融業沒有營收、毛利，會是 null）
 FIN_COLS = (("營業收入",), ("營業毛利（毛損）淨額", "營業毛利（毛損）"), ("營業利益（損失）",),
             ("淨利（淨損）歸屬於母公司業主", "本期淨利（淨損）", "本期稅後淨利（淨損）"), ("基本每股盈餘（元）",))
@@ -98,17 +116,17 @@ def holders(rows):
 
 
 def stock_json(con, have, code, days, dt_days):
-    """days: [(日期, 名稱, 開, 高, 低, 收, 量, 金額, 還原收盤), ...]；dt_days：有當沖資料的日子"""
+    """days: [(日期, 名稱, 開, 高, 低, 收, 量, 金額, 還原收盤, 市場), ...]；dt_days：{市場: 有當沖資料的日子}"""
     d = [x[0] for x in days]
-    out = {"code": code, "name": days[-1][1], "d": d}
+    out = {"code": code, "name": days[-1][1], "market": days[-1][9], "d": d}
     for i, k in enumerate(("o", "h", "l", "c"), start=2):
         out[k] = [x[i] for x in days]
-    official = rows_by_code(con, "stock_day_all", "Code", code)
+    official = by_code(con, have, "stock_day_all", "Code", code)
     out["chg"] = [num(official[day]["Change"]) if day in official else None for day in d]
     out["v"] = [lots(x[6]) for x in days]
     out["val"] = [None if x[7] is None else round(x[7] / 1e6, 1) for x in days]
 
-    inst = rows_by_code(con, "institutional", "證券代號", code) if "institutional" in have else {}
+    inst = by_code(con, have, "institutional", "證券代號", code)
     get = lambda day, *names: first(inst[day], *names) if day in inst else None  # noqa: E731
     out["fi"] = [None if day not in inst else lots(
         (get(day, "外陸資買賣超股數(不含外資自營商)", "外資買賣超股數") or 0) + (get(day, "外資自營商買賣超股數") or 0))
@@ -116,39 +134,38 @@ def stock_json(con, have, code, days, dt_days):
     out["tr"] = [lots(get(day, "投信買賣超股數")) if day in inst else None for day in d]
     out["dl"] = [lots(get(day, "自營商買賣超股數")) if day in inst else None for day in d]
 
-    margin = rows_by_code(con, "margin", "股票代號", code) if "margin" in have else {}
+    margin = by_code(con, have, "margin", "股票代號", code)
     balance = lambda day, col: int(num(margin[day][col]) or 0) if day in margin else None  # noqa: E731
     out["mf"] = [balance(day, "融資今日餘額") for day in d]
     out["ms"] = [balance(day, "融券今日餘額") for day in d]
     out["ml"] = [balance(day, "融資限額") for day in d]
 
-    bw = rows_by_code(con, "bwibbu_all", "Code", code) if "bwibbu_all" in have else {}
+    bw = by_code(con, have, "bwibbu_all", "Code", code)
     for k, col in (("pe", "PEratio"), ("dy", "DividendYield"), ("pb", "PBratio")):
         out[k] = [num(bw[day][col]) if day in bw else None for day in d]
 
-    ex = rows_by_code(con, "ex_rights", "股票代號", code) if "ex_rights" in have else {}
+    ex = by_code(con, have, "ex_rights", "股票代號", code)
     out["ex"] = [[day, r["權/息"], num(r["權值+息值"]), num(r["除權息前收盤價"]), num(r["除權息參考價"])]
                  for day, r in sorted(ex.items())]
 
-    rev = rows_by_code(con, "monthly_revenue", "公司代號", code) if "monthly_revenue" in have else {}
+    rev = by_code(con, have, "monthly_revenue", "公司代號", code)
     out["rev"] = [[ym, num(r["營業收入-當月營收"]), num(r["營業收入-去年同月增減(%)"]), num(r["營業收入-上月比較增減(%)"]),
                    num(r["累計營業收入-當月累計營收"]), num(r["累計營業收入-前期比較增減(%)"])] for ym, r in sorted(rev.items())]
     if rev:
         out["industry"] = rev[max(rev)]["產業別"]
 
-    notice = rows_by_code(con, "notice", "證券代號", code) if "notice" in have else {}
-    out["nt"] = [[day, r["注意交易資訊"]] for day, r in sorted(notice.items())]   # 累計次數一律是 1，不放
+    notice = by_code(con, have, "notice", "證券代號", code)
+    out["nt"] = [[day, r["注意交易資訊"]] for day, r in sorted(notice.items())]   # 上市的累計次數一律是 1，不放
     # 處置股每天都會列出處置中的股票，同一次處置會重複出現，用期間去重
-    disp = set()
-    if "disposition" in have:
-        disp = set(con.execute('SELECT "處置起迄時間", "處置措施", "處置條件" FROM disposition WHERE "證券代號" = ?', (code,)))
+    disp = set(query_both(con, have, "disposition",
+                          'SELECT "處置起迄時間", "處置措施", "處置條件" FROM {t} WHERE "證券代號" = ?', (code,)))
     out["dp"] = sorted([*map(roc_date, period.split("～")), measure, cond] for period, measure, cond in disp)
 
-    trade = rows_by_code(con, "day_trading", "證券代號", code) if "day_trading" in have else {}
-    out["dtr"] = [None if day not in dt_days or not x[6] else
+    trade = by_code(con, have, "day_trading", "證券代號", code)
+    out["dtr"] = [None if day not in dt_days[x[9]] or not x[6] else
                   round((num(trade[day]["當日沖銷交易成交股數"]) or 0) / x[6] * 100, 2) if day in trade else 0
                   for day, x in zip(d, days)]
-    sbl = rows_by_code(con, "sbl_short", "代號", code) if "sbl_short" in have else {}
+    sbl = by_code(con, have, "sbl_short", "代號", code)
     out["sb"] = [lots(num(sbl[day]["借券賣出當日餘額"]) or 0) if day in sbl else None for day in d]
     if "shareholding" in have:
         con.row_factory = sqlite3.Row
@@ -158,7 +175,7 @@ def stock_json(con, have, code, days, dt_days):
             con.row_factory = None
     else:
         out["sh"] = []
-    out["fin"] = quarterly(rows_by_code(con, "income_statement", "公司代號", code)) if "income_statement" in have else []
+    out["fin"] = quarterly(by_code(con, have, "income_statement", "公司代號", code))
 
     # 去掉整欄都沒資料的欄位（例如 ETF 沒有本益比），減少檔案大小
     for k in [k for k, v in out.items() if isinstance(v, list) and v and all(x is None for x in v)]:
@@ -183,9 +200,13 @@ def streak(values):
     return n * sign
 
 
+INDEX_NAME = {"上市": "加權指數", "上櫃": "櫃買指數"}
+
+
 def risk(data, adj, taiex):
     """風險指標，以還原權息價計算（除權息不會被當成下跌）：
-    ATR14（Wilder 平滑）、20 日年化波動率、距最近 250 日最高收盤的回檔、最近 20 / 60 日相對加權指數的漲跌（百分點）"""
+    ATR14（Wilder 平滑）、20 日年化波動率、距最近 250 日最高收盤的回檔、
+    最近 20 / 60 日相對大盤（上市比加權指數、上櫃比櫃買指數，taiex 傳入對應的指數）的漲跌（百分點）"""
     idx = [i for i, x in enumerate(adj) if x is not None]
     if len(idx) < 21:
         return None
@@ -203,7 +224,8 @@ def risk(data, adj, taiex):
     last = adj[idx[-1]]
     out = {"atr14": round(atr, 2), "atr_pct": round(atr / last * 100, 2),
            "hv20": round(math.sqrt(sum((r - mean) ** 2 for r in rets) / (len(rets) - 1) * 252) * 100, 1),
-           "drawdown_250": round((last / max(adj[i] for i in idx[-250:]) - 1) * 100, 2)}
+           "drawdown_250": round((last / max(adj[i] for i in idx[-250:]) - 1) * 100, 2),
+           "rs_index": INDEX_NAME[data["market"]]}
     for n in (20, 60):
         if len(idx) > n and taiex.get(d[idx[-1]]) and taiex.get(d[idx[-1 - n]]):
             market = taiex[d[idx[-1]]] / taiex[d[idx[-1 - n]]] - 1
@@ -227,7 +249,7 @@ def summary(con, have, data, adj, latest, forecast, generated_at, taiex):
     lo = min(w, key=lambda j: data["l"][j] or math.inf, default=None)
 
     out = {
-        "code": data["code"], "name": data["name"], "industry": data.get("industry", ""), "market": "上市",
+        "code": data["code"], "name": data["name"], "industry": data.get("industry", ""), "market": data["market"],
         "date": d[i],                    # 這檔股票最後一個交易日；跟 latest_market_date 不同表示停止交易或已下市
         "latest_market_date": latest,
         "generated_at": generated_at,
@@ -309,13 +331,11 @@ def summary(con, have, data, adj, latest, forecast, generated_at, taiex):
 
     # 注意股：最近 5 個交易日被列入的紀錄；處置股：最新交易日在處置期間內
     code = data["code"]
-    notice = rows_by_code(con, "notice", "證券代號", code) if "notice" in have else {}
+    notice = by_code(con, have, "notice", "證券代號", code)
     out["notice"] = [{"date": day, "count": notice[day]["累計次數"], "info": notice[day]["注意交易資訊"]}
                      for day in d[-5:] if day in notice]
-    disp = []
-    if "disposition" in have:
-        disp = con.execute('SELECT "處置起迄時間", "處置措施", "處置條件" FROM disposition '
-                           'WHERE "證券代號" = ? AND _key = ? ORDER BY "處置起迄時間"', (code, latest)).fetchall()
+    disp = sorted(query_both(con, have, "disposition", 'SELECT "處置起迄時間", "處置措施", "處置條件" FROM {t} '
+                             'WHERE "證券代號" = ? AND _key = ?', (code, latest)))
     # 前後兩次處置期間重疊時會有兩筆，取期間較晚的那筆
     out["disposition"] = dict(zip(("period", "measure", "condition"), disp[-1])) if disp else None
     out["ex_rights_upcoming"] = forecast.get(code, [])
@@ -336,15 +356,17 @@ def dividend(r):
 
 
 def load_forecast(con, have, latest):
-    """除權息預告：{代號: [{'date', 'type', 'cash_dividend', 'stock_dividend_rate'}, ...]}，只取最新交易日（含）之後的"""
+    """除權息預告（上市、上櫃）：{代號: [{'date', 'type', 'cash_dividend', 'stock_dividend_rate'}, ...]}，
+    只取最新交易日（含）之後的"""
     out = {}
-    if "ex_rights_forecast" not in have:
-        return out
     con.row_factory = sqlite3.Row
     try:
-        for r in con.execute("SELECT * FROM ex_rights_forecast ORDER BY 除權除息日期"):
-            if r["除權除息日期"] >= latest:
-                out.setdefault(r["股票代號"], []).append({"date": r["除權除息日期"], "type": r["除權息"], **dividend(r)})
+        for table in ("ex_rights_forecast", "tpex_ex_rights_forecast"):
+            if table not in have:
+                continue
+            for r in con.execute(f"SELECT * FROM {table} ORDER BY 除權除息日期"):
+                if r["除權除息日期"] >= latest:
+                    out.setdefault(r["股票代號"], []).append({"date": r["除權除息日期"], "type": r["除權息"], **dividend(r)})
     finally:
         con.row_factory = None
     return out
@@ -356,31 +378,36 @@ def build(con, have):
                        ("ex_rights", "股票代號"), ("monthly_revenue", "公司代號"),
                        ("notice", "證券代號"), ("disposition", "證券代號"), ("day_trading", "證券代號"),
                        ("sbl_short", "代號"), ("shareholding", "證券代號"), ("income_statement", "公司代號")):
-        if table in have:
-            con.execute(f'CREATE INDEX IF NOT EXISTS "idx_{table}_code" ON "{table}" ("{col}")')
+        for t in (table, f"tpex_{table}"):
+            if t in have:
+                con.execute(f'CREATE INDEX IF NOT EXISTS "idx_{t}_code" ON "{t}" ("{col}")')
     for folder in (OUT_DIR, SUMMARY_DIR):
         folder.mkdir(parents=True, exist_ok=True)
         for old in folder.glob("*.json"):
             old.unlink()
 
     latest = con.execute("SELECT MAX(date) FROM stock_day_adj").fetchone()[0]
-    taiex = {day: num(v) for day, v in con.execute("SELECT _key, ClosingIndex FROM taiex")} if "taiex" in have else {}
+    # 各市場的大盤指數（算相對強弱）與有當沖資料的日子（那天有資料但股票不在名單上，當沖比率是 0）
+    index, dt_days = {}, {}
+    for market, prefix, table in (("上市", "", "taiex"), ("上櫃", "tpex_", "tpex_index")):
+        index[market] = {day: num(v) for day, v in con.execute(f"SELECT _key, ClosingIndex FROM {table}")} if table in have else {}
+        trade = f"{prefix}day_trading"
+        dt_days[market] = {r[0] for r in con.execute(f"SELECT DISTINCT _key FROM {trade}")} if trade in have else set()
     forecast = load_forecast(con, have, latest)
-    dt_days = {r[0] for r in con.execute("SELECT DISTINCT _key FROM day_trading")} if "day_trading" in have else set()
     generated_at = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).isoformat(timespec="seconds")
     listing = []
-    sql = ("SELECT code, date, name, open, high, low, close, volume, value, adj_close "
+    sql = ("SELECT code, date, name, open, high, low, close, volume, value, adj_close, market "
            "FROM stock_day_adj ORDER BY code, date")
     for code, group in groupby(con.execute(sql), key=lambda r: r[0]):
         days = [r[1:] for r in group]
         data = stock_json(con, have, code, days, dt_days)
         (OUT_DIR / f"{code}.json").write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")),
                                               encoding="utf-8")
-        brief = summary(con, have, data, [x[8] for x in days], latest, forecast, generated_at, taiex)
+        brief = summary(con, have, data, [x[8] for x in days], latest, forecast, generated_at, index[data["market"]])
         (SUMMARY_DIR / f"{code}.json").write_text(json.dumps(brief, ensure_ascii=False, separators=(",", ":")),
                                                   encoding="utf-8")
-        # 個股清單：代號、名稱、產業、最後交易日是否為最新交易日（已下市的股票仍可查歷史）
-        listing.append([code, data["name"], data.get("industry", ""), days[-1][0] == latest])
+        # 個股清單：代號、名稱、產業、最後交易日是否為最新交易日（已下市的股票仍可查歷史）、市場
+        listing.append([code, data["name"], data.get("industry", ""), days[-1][0] == latest, data["market"]])
     (ROOT / "site" / "data" / "stocks.json").write_text(json.dumps(listing, ensure_ascii=False, separators=(",", ":")),
                                                           encoding="utf-8")
     return len(listing)

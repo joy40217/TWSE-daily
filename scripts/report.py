@@ -69,7 +69,8 @@ def query(con, sql, *args):
 def scan_signals(con, targets):
     """回傳 {日期: {'new_high': [代號...], 'golden': [...], 'death': [...], 'volume': [...]}}"""
     out = defaultdict(lambda: defaultdict(list))
-    sql = "SELECT code, date, adj_close, volume, value FROM stock_day_adj ORDER BY code, date"
+    # 報告只有上市股票；上櫃的日 K 只用在個股頁
+    sql = "SELECT code, date, adj_close, volume, value FROM stock_day_adj WHERE market = '上市' ORDER BY code, date"
     code_now, closes, vols, prev_ma5, prev_ma20 = None, None, None, None, None
     for code, day, close, volume, value in con.execute(sql):
         if not is_stock(code) or close is None:

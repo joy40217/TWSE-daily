@@ -31,7 +31,7 @@ function adjFactors() {
 const price = (k, i) => (S[k][i] == null ? null : adjust ? +(S[k][i] * factor[i]).toFixed(4) : S[k][i]);
 const adjClose = (i) => (S.c[i] == null ? null : S.c[i] * factor[i]);
 
-// 漲跌用證交所公布的價差（除權息日是跟參考價比），漲跌幅 = 價差 / (收盤 - 價差)
+// 漲跌用證交所、櫃買中心公布的價差（除權息日是跟參考價比），漲跌幅 = 價差 / (收盤 - 價差)
 function change(i) {
   const c = S.c[i], chg = S.chg[i];
   if (c == null || chg == null || c === chg) return { chg: null, pct: null };
@@ -876,7 +876,7 @@ function renderCards() {
       `<span class="nowrap">約股價 ${nf(rk.atr_pct, 2)}%</span>` +
       `<br><span class="nowrap" title="最近 20 個交易日報酬的標準差，換算成一年">年化波動 ${nf(rk.hv20, 1)}%</span>` +
       `<br><span class="nowrap" title="最新收盤比最近 250 個交易日最高收盤（還原權息）">距一年高點 <span class="${tone(rk.drawdown_250)}">${signed(rk.drawdown_250, 2, "%")}</span></span>` +
-      (rk.rs_20d == null ? "" : `<br><span class="nowrap" title="最近 20 個交易日漲跌減去加權指數漲跌（百分點）">20 日超額報酬 <span class="${tone(rk.rs_20d)}">${signed(rk.rs_20d, 2, "%")}</span></span>`)));
+      (rk.rs_20d == null ? "" : `<br><span class="nowrap" title="最近 20 個交易日漲跌減去${esc(rk.rs_index ?? "加權指數")}漲跌（百分點）">20 日超額報酬 <span class="${tone(rk.rs_20d)}">${signed(rk.rs_20d, 2, "%")}</span></span>`)));
   }
   $("cards").innerHTML = out.join("");
 }
@@ -972,7 +972,7 @@ async function init() {
     ]);
   } catch (e) {
     $("title").textContent = code;
-    $("subtitle").textContent = `找不到 ${code} 的資料（只有上市股票與 ETF）`;
+    $("subtitle").textContent = `找不到 ${code} 的資料（只有上市、上櫃股票與 ETF）`;
     $("main").hidden = true;
     $("yahoo").hidden = true;
     return;
@@ -984,9 +984,10 @@ async function init() {
   pos = new Map(traded.map((i, k) => [i, k]));
   document.title = `${S.code} ${S.name}｜個股資訊`;
   $("title").textContent = `${S.code} ${S.name}`;
-  $("subtitle").textContent = [S.industry, `資料 ${S.d[0]} ～ ${S.d[S.d.length - 1]}`].filter(Boolean).join("・");
+  S.market ??= "上市";
+  $("subtitle").textContent = [S.market, S.industry, `資料 ${S.d[0]} ～ ${S.d[S.d.length - 1]}`].filter(Boolean).join("・");
   $("back").href = `index.html#${S.d[S.d.length - 1]}`;
-  $("yahoo").href = `https://tw.stock.yahoo.com/quote/${encodeURIComponent(S.code)}.TW`;
+  $("yahoo").href = `https://tw.stock.yahoo.com/quote/${encodeURIComponent(S.code)}.${S.market === "上櫃" ? "TWO" : "TW"}`;
 
   renderBadges();
   renderCards();
