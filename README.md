@@ -249,9 +249,13 @@
 
 ### 檢查證交所網站端點
 
-    python scripts/check_rwd.py
+    python scripts/check_rwd.py               # 測試日期 = 最近一個平日
+    python scripts/check_rwd.py 2018-10-02    # 指定日期
 
-或在 Actions 分頁手動執行「檢查證交所網站端點」（也會檢查櫃買中心）。GitHub 主機在國外，兩邊結果可能不同。
+或在 Actions 分頁手動執行「檢查證交所網站端點」（可填日期）。會測證交所幾個主要端點，以及每個上櫃資料集用到的
+櫃買中心端點（含 OpenAPI），列出 HTTP 狀態、筆數、大小與耗時。GitHub 主機在國外，兩邊結果可能不同：
+例如 2018-10-02 的上櫃行情在 GitHub 上一直回 403、本機正常。回補某一天一直失敗時，可以填那天的日期在兩邊各跑一次，
+如果只有 GitHub 回 403，就在本機用 `backfill.py` 補那一天再 push。
 
 ### 轉成 SQLite 分析
 

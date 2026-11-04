@@ -1,7 +1,11 @@
 name: 檢查證交所網站端點
 
 on:
-  workflow_dispatch: {}   # 只能手動執行
+  workflow_dispatch:   # 只能手動執行
+    inputs:
+      date:
+        description: "測試日期，例如 2018-10-02（留空 = 最近一個平日）；某一天回補一直失敗時，用來確認是不是 GitHub 被擋"
+        required: false
 
 jobs:
   check:
@@ -12,4 +16,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install requests
-      - run: python scripts/check_rwd.py
+      - name: 檢查證交所、櫃買中心端點
+        env:
+          DATE: ${{ inputs.date }}
+        run: python scripts/check_rwd.py "$DATE"
