@@ -579,9 +579,10 @@ TPEX_CODE = re.compile(r"\d{4}[A-Z]?|00\d{3,4}[A-Z]?")   # 上櫃股票、特別
 
 
 def tpex_query(path: str, **params):
-    """查詢櫃買中心網站（www.tpex.org.tw/www/zh-tw/...）；假日、尚未公布時表格是空的，由各函式判斷"""
+    """查詢櫃買中心網站（www.tpex.org.tw/www/zh-tw/...）；假日、尚未公布時表格是空的，由各函式判斷。
+    從 GitHub 連過去常被中途斷線（回應不完整、連線被重設），尤其約 2 MB 的行情表，所以多試幾次"""
     qs = "&".join(f"{k}={v}" for k, v in params.items())
-    js = get_json(f"{TPEX}/{path}?{qs}&response=json")
+    js = get_json(f"{TPEX}/{path}?{qs}&response=json", retries=5)
     time.sleep(PAUSE)
     return js if str(js.get("stat", "")).lower() == "ok" else None
 
@@ -849,7 +850,14 @@ def fetch_by_day(name, cfg):
         refresh = cfg.get("refresh") and key in days[-REFRESH:]
         if out.exists() and not refresh:
             continue
-        rows = cfg["by_day"](dt.date.fromisoformat(key))
+        try:
+            rows = cfg["by_day"](dt.date.fromisoformat(key))
+        except Exception as e:  # noqa: BLE001
+            if not out.exists():
+                raise
+            # 已經有檔案、只是重查有沒有更正：查不到就算了，不算失敗
+            print(f"  {key} 重查失敗，保留已存的檔案：{e}")
+            continue
         if not rows and not (rows is not None and cfg.get("fields")):
             print(f"  {key} 尚未公布，下次執行再補")
         elif out.exists() and same_rows(out, rows):

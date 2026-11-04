@@ -19,7 +19,7 @@ permissions:
 jobs:
   backfill:
     runs-on: ubuntu-latest
-    timeout-minutes: 350   # GitHub 上限 6 小時；上市資料集一年約 3.5～4 小時、上櫃約 2 小時，上市一次補一年、上櫃一次補兩年
+    timeout-minutes: 350   # GitHub 上限 6 小時；上市資料集一年約 3.5～4 小時、上櫃約 2.5～3 小時（常斷線重試），都一次補一年
     steps:
       - uses: actions/checkout@v4
 
@@ -53,6 +53,6 @@ jobs:
             echo "沒有新資料"
           else
             git commit -m "data: backfill ${START} ~ ${END:-昨天}"
-            git pull --rebase   # 回補期間每日 workflow 可能已推了新資料
-            git push
+            # 回補期間每日 workflow 可能已推了新資料，所以先 pull；GitHub 偶爾回 500，等一下再試
+            for i in 1 2 3; do git pull --rebase && git push && break; [ $i = 3 ] && exit 1; sleep 30; done
           fi

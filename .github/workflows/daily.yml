@@ -46,8 +46,8 @@ jobs:
             echo "沒有新資料"
           else
             git commit -m "$(bash scripts/commit_message.sh data data)"   # 訊息寫資料日期，不是執行當天
-            git pull --rebase   # 回補 workflow 可能同時推了資料
-            git push
+            # 回補 workflow 可能同時推了資料，所以先 pull；GitHub 偶爾回 500，等一下再試
+            for i in 1 2 3; do git pull --rebase && git push && break; [ $i = 3 ] && exit 1; sleep 30; done
           fi
 
   report:
@@ -83,8 +83,7 @@ jobs:
             echo "沒有新報告"
           else
             git commit -m "$(bash scripts/commit_message.sh report site/data/days)"
-            git pull --rebase
-            git push
+            for i in 1 2 3; do git pull --rebase && git push && break; [ $i = 3 ] && exit 1; sleep 30; done
           fi
 
       - uses: actions/configure-pages@v5
