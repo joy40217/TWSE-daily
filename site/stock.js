@@ -529,6 +529,8 @@ function buildMarginChart() {
 const VALUES = [["pe", "本益比"], ["dy", "殖利率 %"], ["pb", "股價淨值比"], ["river", "本益比河流"]];
 const RIVER_PCT = [10, 25, 50, 75, 90];   // 河流圖的倍數：最近約 5 年（1250 個交易日）本益比的百分位數
 const RIVER_DAYS = 1250;
+const RESTATED = "<br>配股後，證交所、櫃買中心的本益比、淨值比要等下一次財報（殖利率要等下一次股利）才改用新的股數，" +
+  "這段期間的數字已依配股率修正。";
 
 // 近四季 EPS 由「收盤價 ÷ 本益比」反推（也就是證交所算本益比用的 EPS）；虧損時沒有本益比，也就算不出來
 const eps = (i) => (S.c[i] != null && S.pe[i] > 0 ? S.c[i] / S.pe[i] : null);
@@ -576,8 +578,8 @@ function buildValueChart() {
     for (const s of [close, ...bands]) s.applyOptions({ visible: river });
     $("value-note").innerHTML = river ?
       `河流圖：粗線為<b>原始</b>收盤價，細線為近四季 EPS × 本益比 ${mult.join("、")} 倍` +
-      `（最近約 5 年本益比的第 ${RIVER_PCT.join("、")} 百分位，實線為中位數）。EPS 由收盤價 ÷ 本益比反推，虧損時線會中斷。` :
-      "虧損時沒有本益比。";
+      `（最近約 5 年本益比的第 ${RIVER_PCT.join("、")} 百分位，實線為中位數）。EPS 由收盤價 ÷ 本益比反推，虧損時線會中斷。` + RESTATED :
+      "虧損時沒有本益比。" + RESTATED;
     if (shownDay >= 0) charts.valueTop?.(shownDay);
     tabs.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.value === key));
     charts.daily?.place();
@@ -825,7 +827,10 @@ function renderCards() {
     card("成交量", `${nf(S.v[i])} 張`, `金額 ${nf(S.val[i] / 100, 2)} 億`),
   ];
   if (has("pe") || has("dy") || has("pb")) {
-    out.push(card("本益比", nf(S.pe[i], 2), `殖利率 ${S.dy[i] == null ? "—" : nf(S.dy[i], 2) + "%"}　淨值比 ${nf(S.pb[i], 2)}`));
+    // 本益比傍晚才公布：最新一天還沒有的話，顯示最近有資料的那天
+    const j = S.d.findLastIndex((_, k) => S.pe[k] != null || S.dy[k] != null || S.pb[k] != null);
+    out.push(card(j === i ? "本益比" : `本益比（${S.d[j].slice(5)}）`, nf(S.pe[j], 2),
+      `殖利率 ${S.dy[j] == null ? "—" : nf(S.dy[j], 2) + "%"}　淨值比 ${nf(S.pb[j], 2)}`));
   }
   if (has("fi")) {
     const total = S.fi[i] == null ? null : S.fi[i] + (S.tr[i] ?? 0) + (S.dl[i] ?? 0);

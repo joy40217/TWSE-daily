@@ -11,7 +11,7 @@
     v         成交量（張）          val  成交金額（百萬元）
     fi tr dl  外資、投信、自營商買賣超（張）
     mf ms     融資、融券餘額（張）       ml  融資限額（張）
-    pe dy pb  本益比、殖利率(%)、股價淨值比
+    pe dy pb  本益比、殖利率(%)、股價淨值比；配股後官方還沒換成新股數的期間已修正（見 restate_valuation()）
     ex        除權息紀錄 [[日期, 權/息, 權值+息值, 除權息前收盤價, 除權息參考價], ...]
     rev       月營收 [[年月, 營收(千元), 年增率(%), 月增率(%), 累計營收(千元), 累計年增率(%)], ...]
     nt        注意股紀錄 [[日期, 注意交易資訊], ...]
@@ -20,7 +20,8 @@
     sb        借券賣出餘額（張）
     sh        集保股權分散（每週）[[資料日期, 千張以上持股 %, 400 張以上持股 %, 股東人數, 千張以上人數], ...]
     fin       季報（單季，千元）[[季度, 營收, 營業毛利, 營業利益, 歸屬母公司淨利, 每股盈餘], ...]；
-              公開資訊觀測站是當年累計，這裡減去前一季累計換算成單季，前一季沒有資料時為 null
+              公開資訊觀測站是當年累計，這裡減去前一季累計換算成單季，前一季沒有資料時為 null；
+              EPS 依之後的配股換算成現在的股數（見 quarterly()）
 
 另外每檔產生一份精簡摘要 site/data/summary/<代號>.json（約 1～2 KB），給排程任務直接讀最新狀態，
 不必下載完整歷史；每一檔都有，所以看不出使用者追蹤哪些股票。欄位見 summary()。
@@ -87,9 +88,87 @@ FIN_COLS = (("營業收入",), ("營業毛利（毛損）淨額", "營業毛利�
             ("淨利（淨損）歸屬於母公司業主", "本期淨利（淨損）", "本期稅後淨利（淨損）"), ("基本每股盈餘（元）",))
 
 
-def quarterly(rows):
-    """{'2026-Q2': row, ...}（當年累計）-> [[季度, 營收, 毛利, 營業利益, 淨利, EPS], ...]（單季）"""
+def share_events(con, have, code):
+    """配股 [(除權日, 股數倍數), ...]：倍數 = 1 + 每千股無償配股 / 1000；
+    上市從 ex_rights_detail（除權明細）、上櫃從 tpex_ex_rights 取得。現金增資不算（股價跟淨值也跟著變，不是單純的稀釋）"""
+    out = []
+    for table, col in (("ex_rights_detail", "每千股無償配股"), ("tpex_ex_rights", "每仟股無償配股")):
+        if table in have:
+            out += [(day, 1 + (num(v) or 0) / 1000)
+                    for day, v in con.execute(f'SELECT _key, "{col}" FROM {table} WHERE "股票代號" = ?', (code,))]
+    return sorted(e for e in out if e[1] > 1.0001)
+
+
+# 季報的期末與公布期限（第 4 季是年報，隔年 3 月底）：判斷某一季的 EPS 是配股前還是配股後的股數
+PERIOD_END = {1: "03-31", 2: "06-30", 3: "09-30", 4: "12-31"}
+DEADLINE = {1: "05-15", 2: "08-14", 3: "11-14", 4: "03-31"}
+
+
+def restate_valuation(data, events):
+    """證交所、櫃買中心的本益比、淨值比、殖利率在配股後，還是用配股前的每股盈餘、淨值、股利，
+    要等下一次財報（殖利率要等下一次股利）才換成新的股數，例如緯穎 2026-09-02 每千股配 1,982.8 股，
+    本益比從約 25 變成約 8。這段期間依配股倍數修正（本益比、淨值比乘上倍數，殖利率除以倍數）。
+
+    判斷官方換了沒：收盤價 ÷ 本益比反推的每股盈餘（淨值比、殖利率同理）跟之前一樣（考慮公布值四捨五入到小數 2 位的誤差），
+    表示還沒換。除權日以後第一次變動是除權日以後才公布的財報（EPS 會依 IAS 33 追溯換算成配股後的股數）
+    或新年度的股利，就算換了，之後不再修正。除權日當天的變動可能是改用配股前就公布的財報（櫃買中心常這樣，
+    仍是舊的股數），也可能剛好是新財報（例如 1235 在第 3 季財報期限前一天除權）：變動幅度比較接近
+    「除以配股倍數」才算換了"""
+    c = data["c"]
+    for k, per_share in (("pe", lambda p, v: (p / (v + 0.005), p / (v - 0.005) if v > 0.005 else math.inf)),
+                         ("pb", lambda p, v: (p / (v + 0.005), p / (v - 0.005) if v > 0.005 else math.inf)),
+                         ("dy", lambda p, v: (p * (v - 0.005) / 100, p * (v + 0.005) / 100))):
+        values = data.get(k) or []
+        # m：還沒反映的配股倍數；ref：目前官方用的每股數字範圍；ex_day：最近一次除權日
+        j, m, ref, last, ex_day = 0, 1.0, None, None, None
+        for i, day in enumerate(data["d"]):
+            while j < len(events) and events[j][0] <= day:
+                if m == 1.0:
+                    ref = last
+                m *= events[j][1]
+                ex_day = events[j][0]
+                j += 1
+            v = values[i] if i < len(values) else None
+            if v is None or v <= 0 or c[i] is None:
+                continue
+            lo, hi = per_share(c[i], v)
+            if m != 1.0 and ref is not None and not (lo <= ref[1] and ref[0] <= hi):
+                r = (lo + hi) / (ref[0] + ref[1])
+                if day > ex_day or abs(math.log(r * m)) < abs(math.log(r)):   # 換成新股數
+                    m, ref = 1.0, None
+                else:   # 除權日當天換了配股前公布的財報，股數還是舊的
+                    ref = (lo, hi)
+            if m != 1.0 and ref is not None:
+                values[i] = round(v / m if k == "dy" else v * m, 2)
+            elif m != 1.0:   # 除權前沒有數字可以比，無法判斷，不修正
+                m = 1.0
+            last = (lo, hi)
+
+
+def quarterly(rows, events=()):
+    """{'2026-Q2': row, ...}（當年累計）-> [[季度, 營收, 毛利, 營業利益, 淨利, EPS], ...]（單季）。
+    EPS 依之後的配股換算成現在的股數（跟還原權息價一樣），配股前後的季度才能相減、相加：
+    除權日在期末之前的季度已經是新股數；在公布期限之後的是舊股數；在期末與期限之間的，
+    比較這一季與下一季的「淨利 ÷ EPS」（加權股數）有沒有跟著變成倍數，判斷公布時是否已經配股"""
     ytd = {k: [first(r, *names) for names in FIN_COLS] for k, r in rows.items()}
+    shares = {k: v[3] / v[4] for k, v in ytd.items() if v[3] and v[4] and abs(v[4]) >= 0.1 and v[3] * v[4] > 0}
+    keys = sorted(ytd)
+    for k in keys:
+        if ytd[k][4] is None:
+            continue
+        year, q = map(int, k.split("-Q"))
+        end, deadline = f"{year}-{PERIOD_END[q]}", f"{year + (q == 4)}-{DEADLINE[q]}"
+        basis = 1.0
+        for day, m in events:
+            if day <= end:
+                continue
+            if day > deadline:
+                basis *= m
+                continue
+            later = next((k2 for k2 in keys if k2 > k and f"{k2[:4]}-{PERIOD_END[int(k2[-1])]}" >= day and k2 in shares), None)
+            if k in shares and later and shares[later] / shares[k] > math.sqrt(m):
+                basis *= m
+        ytd[k][4] /= basis
     out = []
     for k in sorted(ytd):
         year, q = k.split("-Q")
@@ -143,6 +222,8 @@ def stock_json(con, have, code, days, dt_days):
     bw = by_code(con, have, "bwibbu_all", "Code", code)
     for k, col in (("pe", "PEratio"), ("dy", "DividendYield"), ("pb", "PBratio")):
         out[k] = [num(bw[day][col]) if day in bw else None for day in d]
+    events = share_events(con, have, code)
+    restate_valuation(out, events)
 
     ex = by_code(con, have, "ex_rights", "股票代號", code)
     out["ex"] = [[day, r["權/息"], num(r["權值+息值"]), num(r["除權息前收盤價"]), num(r["除權息參考價"])]
@@ -175,7 +256,7 @@ def stock_json(con, have, code, days, dt_days):
             con.row_factory = None
     else:
         out["sh"] = []
-    out["fin"] = quarterly(by_code(con, have, "income_statement", "公司代號", code))
+    out["fin"] = quarterly(by_code(con, have, "income_statement", "公司代號", code), events)
 
     # 去掉整欄都沒資料的欄位（例如 ETF 沒有本益比），減少檔案大小
     for k in [k for k, v in out.items() if isinstance(v, list) and v and all(x is None for x in v)]:
@@ -377,7 +458,8 @@ def build(con, have):
     for table, col in (("stock_day_all", "Code"), ("institutional", "證券代號"), ("margin", "股票代號"), ("bwibbu_all", "Code"),
                        ("ex_rights", "股票代號"), ("monthly_revenue", "公司代號"),
                        ("notice", "證券代號"), ("disposition", "證券代號"), ("day_trading", "證券代號"),
-                       ("sbl_short", "代號"), ("shareholding", "證券代號"), ("income_statement", "公司代號")):
+                       ("sbl_short", "代號"), ("shareholding", "證券代號"), ("income_statement", "公司代號"),
+                       ("ex_rights_detail", "股票代號")):
         for t in (table, f"tpex_{table}"):
             if t in have:
                 con.execute(f'CREATE INDEX IF NOT EXISTS "idx_{t}_code" ON "{t}" ("{col}")')

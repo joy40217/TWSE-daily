@@ -96,7 +96,7 @@
         <div class="tabs" id="value-tabs" role="group" aria-label="指標"></div>
       </div>
       <div class="chart chart-sm" id="chart-value"></div>
-      <p class="note" id="value-note">虧損時沒有本益比。</p>
+      <p class="note" id="value-note"></p>
     </section>
 
     <section class="panel" id="panel-rev">
@@ -109,7 +109,8 @@
       <div class="panel-head"><h2>季報</h2><div class="legend" id="legend-fin"></div></div>
       <div class="chart chart-sm" id="chart-fin"></div>
       <p class="note">長條為單季每股盈餘（元），線為<span class="ma5">毛利率</span>、<span class="ma20">營益率</span>、<span class="ma60">淨利率</span> %（左軸）。
-        資料來自公開資訊觀測站的綜合損益表，原始數字是當年累計，這裡減去前一季換算成單季；金融業沒有營收、毛利，只有每股盈餘。</p>
+        資料來自公開資訊觀測站的綜合損益表，原始數字是當年累計，這裡減去前一季換算成單季；金融業沒有營收、毛利，只有每股盈餘。
+        有配股的話，配股前公布的每股盈餘換算成現在的股數（跟還原權息價一樣），所以會比當時公布的數字小。</p>
     </section>
 
     <section class="grid">

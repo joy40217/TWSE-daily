@@ -535,6 +535,44 @@ def ex_rights(start: dt.date, end: dt.date):
     return group_rows(rows, DAY_KEYS, parse_date, None) if rows else {}
 
 
+EX_DETAIL_COLS = ["股票代號", "股票名稱", "每股現金股利", "每千股無償配股", "每千股認購", "每股認購金額"]
+
+
+def ex_rights_detail(start: dt.date, end: dt.date):
+    """除權（配股）的明細（TWT49UDetail）：每股現金股利、每千股配股、每千股現金增資認購 -> {'2026-09-02': [...], ...}。
+    計算結果表只有參考價，算不出配股後股數變成幾倍（本益比、殖利率要用）；只查已存的 ex_rights 裡
+    權/息有「權」的股票，已經查過的日子略過"""
+    out = {}
+    for f in sorted((DATA_DIR / "ex_rights").glob("*/*.csv")):
+        if not start.isoformat() <= f.stem <= end.isoformat() or out_path("ex_rights_detail", f.stem).exists():
+            continue
+        with f.open(encoding="utf-8-sig", newline="") as fh:
+            codes = [r["股票代號"].strip() for r in csv.DictReader(fh) if "權" in r["權/息"]]
+        rows = []
+        for code in codes:
+            js = get_json(f"{RWD}/exRight/TWT49UDetail?STK_NO={code}&T1={f.stem.replace('-', '')}&response=json")
+            time.sleep(PAUSE)
+            if str(js.get("stat")).lower() != "ok":   # 例如「系統忙碌中」，下次再查
+                raise RuntimeError(f"{code} {f.stem} 除權明細：{js.get('stat')}")
+            if not js.get("data"):   # 查得到但沒有明細：留空白，不要每次重查
+                rows.append({c: (code if c == "股票代號" else "") for c in EX_DETAIL_COLS})
+                continue
+            r = dict(zip(js["fields"], js["data"][0]))
+
+            def amount(*keys):
+                """欄位名稱包含 keys 其中之一的第一欄（普通股是「A. 按普通股股東持股比例每千股無償配股」，
+                特別股是「F. 按特別股股東…」），'1,982.8 股' -> '1982.8'"""
+                k = next((f for f in r if any(x in f for x in keys)), None)
+                return num(re.sub(r"[^\d.,-]", "", r[k])) if k else ""
+
+            rows.append({"股票代號": code, "股票名稱": r["股票名稱"].strip(),
+                         "每股現金股利": amount("每股配發現金股利"), "每千股無償配股": amount("每千股無償配股"),
+                         "每千股認購": amount("每千股認購", "每千股有償認股"), "每股認購金額": amount("每股認購金額")})
+        if rows:
+            out[f.stem] = rows
+    return out
+
+
 # ---- 櫃買中心網站依日期查詢（上櫃），欄位一律轉成上面對應的上市資料集格式，個股頁可以用同一套程式 ----
 
 TPEX_CODE = re.compile(r"\d{4}[A-Z]?|00\d{3,4}[A-Z]?")   # 上櫃股票、特別股與 ETF；行情表裡其他的是權證（約 1 萬檔）
@@ -756,6 +794,7 @@ DATASETS = {
     "notice":           {"by_day": notice, "fields": NOTICE_COLS, "refresh": True},
     "disposition":      {"by_day": disposition, "fields": DISPOSITION_COLS, "refresh": True},
     "ex_rights":        {"by_range": ex_rights},      # 除權除息計算結果（查最近 14 天，晚公布的也抓得到）
+    "ex_rights_detail": {"by_range": ex_rights_detail},   # 配股明細（每千股配股數；要放在 ex_rights 之後）
     "ex_rights_forecast": {"snapshot": ex_rights_forecast},  # 除權除息預告（只保留最新一份）
     "day_trading":      {"by_day": day_trading},      # 個股當日沖銷成交量值
     "sbl_short":        {"by_day": sbl_short},        # 借券賣出餘額（晚上才公布，多半隔天補上）
