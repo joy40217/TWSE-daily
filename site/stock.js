@@ -5,7 +5,7 @@ const SIGNAL_MIN_VALUE = 100;   // 成交金額不到 1 億（val 單位為百�
 const SIGNAL_ROWS = 30;         // 技術訊號表列最近幾筆
 const EVENT_ROWS = 30;          // 事件紀錄列最近幾筆
 const FORWARD = [5, 20];        // 訊號之後幾個交易日的報酬
-const SIGNAL_ORDER = ["創 60 日新高", "黃金交叉", "死亡交叉", "爆量上漲", "爆量下跌", "爆量平盤"];
+const SIGNAL_ORDER = ["創 60 日新高", "創 60 日新低", "黃金交叉", "死亡交叉", "爆量上漲", "爆量下跌", "爆量平盤"];
 
 let S = null;          // 個股資料
 let brief = null;      // 個股摘要 data/summary/<代號>.json（連買連賣天數、注意處置、除權息預告），載入失敗就不顯示
@@ -147,6 +147,7 @@ function scanSignals() {
     const close = adjClose(i);
     if (close == null) return;
     const prevHigh = closes.length >= 59 ? Math.max(...closes.slice(-59)) : null;
+    const prevLow = closes.length >= 59 ? Math.min(...closes.slice(-59)) : null;
     closes.push(close);
     if (closes.length > 60) closes.shift();
     const ma5 = closes.length >= 5 ? avg(closes, 5) : null;
@@ -154,6 +155,7 @@ function scanSignals() {
     const vol = S.v[i] ?? 0;
     const hits = [];
     if (prevHigh != null && close > prevHigh) hits.push(["創 60 日新高", "up"]);
+    if (prevLow != null && close < prevLow) hits.push(["創 60 日新低", "down"]);
     if (![pm5, pm20, ma5, ma20].includes(null)) {
       if (pm5 <= pm20 && ma5 > ma20) hits.push(["黃金交叉", "up"]);
       else if (pm5 >= pm20 && ma5 < ma20) hits.push(["死亡交叉", "down"]);
@@ -957,6 +959,25 @@ document.querySelector("section.grid").addEventListener("click", (e) => {
   if (b) jumpTo(b.dataset.day);
 });
 
+// 自選股按鈕：清單存在這個瀏覽器，收盤報告首頁會列出
+function setupWatchButton() {
+  const b = $("watch");
+  const paint = () => {
+    const on = loadWatchlist().includes(S.code);
+    b.textContent = on ? "★ 已加入自選" : "☆ 加入自選";
+    b.setAttribute("aria-pressed", String(on));
+    b.classList.toggle("on", on);
+  };
+  b.hidden = false;
+  paint();
+  b.addEventListener("click", () => {
+    const list = loadWatchlist();
+    const next = list.includes(S.code) ? list.filter((c) => c !== S.code) : [...list, S.code];
+    if (!saveWatchlist(next)) b.title = "這個瀏覽器不能儲存（例如無痕視窗）";
+    paint();
+  });
+}
+
 // ---- 載入 ----
 
 async function init() {
@@ -993,6 +1014,7 @@ async function init() {
   $("subtitle").textContent = [S.market, S.industry, `資料 ${S.d[0]} ～ ${S.d[S.d.length - 1]}`].filter(Boolean).join("・");
   $("back").href = `index.html#${S.d[S.d.length - 1]}`;
   $("yahoo").href = `https://tw.stock.yahoo.com/quote/${encodeURIComponent(S.code)}.${S.market === "上櫃" ? "TWO" : "TW"}`;
+  setupWatchButton();
 
   renderBadges();
   renderCards();

@@ -394,11 +394,14 @@ def disposition(day: dt.date):
 
 
 def day_trading(day: dt.date):
-    """TWTB4U 當日沖銷交易標的：個股當沖成交股數與買進、賣出金額（2017 年以前可以當沖的股票較少）"""
+    """TWTB4U 當日沖銷交易標的：個股當沖成交股數與買進、賣出金額（2017 年以前可以當沖的股票較少）。
+    下午先公布標的名單、成交量值晚點才有：只有名單（沒有成交股數欄）時當成還沒公布，下次執行再抓"""
     js = query("dayTrading/TWTB4U", date=f"{day:%Y%m%d}", selectType="All")
     if js is None:
         return []
     fields, data = table(js, "證券代號")
+    if "當日沖銷交易成交股數" not in fields:
+        return []
     return [{f: (v.strip() if i < 3 else num(v)) for i, (f, v) in enumerate(zip(fields, r))} for r in data]
 
 

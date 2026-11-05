@@ -35,11 +35,12 @@ import stock_data
 ROOT = build_db.ROOT
 SITE = ROOT / "site"
 DAYS_DIR = SITE / "data" / "days"
-TOP = 10                 # 排行榜列幾檔
+TOP = 20                 # 排行榜列幾檔（網頁先顯示前 10 檔，可展開）
 SIGNAL_TOP = 20          # 每種技術訊號最多列幾檔
+SIGNAL_KEYS = ("new_high", "new_low", "golden", "death", "volume_up", "volume_down", "volume")
 SIGNAL_MIN_VALUE = 1e8   # 當日成交金額低於 1 億的股票不列入技術訊號，避免冷門股雜訊
 YI = 1e8                 # 億
-REPORT_VERSION = 3       # 報告格式改變時加 1，舊的報告會在下次執行時全部重新產生
+REPORT_VERSION = 4       # 報告格式改變時加 1，舊的報告會在下次執行時全部重新產生
 REFRESH_DAYS = 2         # 最近幾個交易日每次都重新產生（資料公布後可能更正、注意股等可能晚點才公布）
 # 類股指數中的大分類（底下還有細分類股），列最強、最弱類股時不算
 SECTOR_GROUPS = {"水泥窯製類", "塑膠化工類", "機電類", "化學生技醫療類", "電子工業類"}
@@ -64,28 +65,61 @@ def query(con, sql, *args):
         con.row_factory = None
 
 
-# ---- 技術訊號：依股票、日期依序掃過一次還原日 K ----
+# ---- 技術訊號與市場寬度：依股票、日期依序掃過一次還原日 K ----
 
-def scan_signals(con, targets):
-    """回傳 {日期: {'new_high': [代號...], 'golden': [...], 'death': [...], 'volume': [...]}}"""
-    out = defaultdict(lambda: defaultdict(list))
-    # 報告只有上市股票；上櫃的日 K 只用在個股頁
-    sql = "SELECT code, date, adj_close, volume, value FROM stock_day_adj WHERE market = '上市' ORDER BY code, date"
+def limit_pct(day):
+    """漲跌停幅度：2015-06-01 起 10%（之前 7%）；收盤價四捨五入到升降單位，所以門檻放寬一點"""
+    return 9.5 if day >= "2015-06-01" else 6.5
+
+
+def scan_market(con, targets):
+    """報告只有上市股票（上櫃的日 K 只用在個股頁），只算一般股票（不含 ETF）。回傳
+    signals：targets 那幾天的技術訊號 {日期: {'new_high': [代號...], 'new_low', 'golden', 'death', 'volume'}}
+             （排除成交金額不到 SIGNAL_MIN_VALUE 的股票）
+    breadth：每一天的市場寬度 {日期: {'stocks', 'above_ma20', 'above_ma60'（%）, 'new_high', 'new_low',
+             'up', 'down', 'limit_up', 'limit_down'}}；新高、新低跟訊號的條件相同但不看成交金額，
+             漲跌停是收在最高（最低）價且漲跌幅達 limit_pct()"""
+    signals = defaultdict(lambda: defaultdict(list))
+    counts = defaultdict(lambda: defaultdict(int))
+    sql = ("SELECT code, date, adj_close, adj_high, adj_low, volume, value FROM stock_day_adj "
+           "WHERE market = '上市' ORDER BY code, date")
     code_now, closes, vols, prev_ma5, prev_ma20 = None, None, None, None, None
-    for code, day, close, volume, value in con.execute(sql):
+    for code, day, close, high, low, volume, value in con.execute(sql):
         if not is_stock(code) or close is None:
             continue
         if code != code_now:
             code_now, closes, vols, prev_ma5, prev_ma20 = code, deque(maxlen=60), deque(maxlen=20), None, None
-        prev_high = max(list(closes)[-59:]) if len(closes) >= 59 else None  # 前 59 天最高收盤
+        prior = list(closes)[-59:]   # 前 59 天收盤
+        prev_high, prev_low = (max(prior), min(prior)) if len(prior) == 59 else (None, None)
+        prev = closes[-1] if closes else None
         closes.append(close)
         window = list(closes)
         ma5 = sum(window[-5:]) / 5 if len(window) >= 5 else None
         ma20 = sum(window[-20:]) / 20 if len(window) >= 20 else None
+        ma60 = sum(window) / 60 if len(window) == 60 else None
+
+        c = counts[day]
+        c["stocks"] += 1
+        if prev:
+            pct = (close / prev - 1) * 100
+            c["up"] += close > prev
+            c["down"] += close < prev
+            c["limit_up"] += pct >= limit_pct(day) and high is not None and close >= high
+            c["limit_down"] += pct <= -limit_pct(day) and low is not None and close <= low
+        for n, ma in ((20, ma20), (60, ma60)):
+            if ma is not None:
+                c[f"n{n}"] += 1
+                c[f"above{n}"] += close > ma
+        if prev_high is not None:
+            c["new_high"] += close > prev_high
+            c["new_low"] += close < prev_low
+
         if day in targets and (value or 0) >= SIGNAL_MIN_VALUE:
-            s = out[day]
+            s = signals[day]
             if prev_high is not None and close > prev_high:
                 s["new_high"].append(code)
+            if prev_low is not None and close < prev_low:
+                s["new_low"].append(code)
             if None not in (prev_ma5, prev_ma20, ma5, ma20):
                 if prev_ma5 <= prev_ma20 and ma5 > ma20:
                     s["golden"].append(code)
@@ -95,7 +129,84 @@ def scan_signals(con, targets):
                 s["volume"].append(code)
         vols.append(volume or 0)
         prev_ma5, prev_ma20 = ma5, ma20
+
+    pct = lambda a, n: round(a / n * 100, 1) if n else None  # noqa: E731
+    breadth = {day: {"stocks": c["stocks"], "above_ma20": pct(c["above20"], c["n20"]), "above_ma60": pct(c["above60"], c["n60"]),
+                     **{k: c[k] for k in ("new_high", "new_low", "up", "down", "limit_up", "limit_down")}}
+               for day, c in counts.items()}
+    return signals, breadth
+
+
+def scan_streaks(con, have, days, targets):
+    """外資、投信連續買超：{日期: {'foreign': [(代號, 天數, 累計張數), ...], 'trust': [...]}}（只算 targets 那幾天）。
+    某天不在三大法人名單上（沒有法人交易）或買賣超為 0、轉成賣超，連買就中斷"""
+    if "institutional" not in have:
+        return {}
+    idx = {d: i for i, d in enumerate(days)}
+    out = defaultdict(lambda: defaultdict(list))
+    sql = ('SELECT "證券代號", _key, "外陸資買賣超股數(不含外資自營商)", "外資買賣超股數", "外資自營商買賣超股數", '
+           '"投信買賣超股數" FROM institutional ORDER BY "證券代號", _key')
+    state = {}
+    for code, day, f1, f2, f3, trust in con.execute(sql):
+        code = str(code).strip()
+        if not is_stock(code) or day not in idx:
+            continue
+        nets = {"foreign": (num(f1) if num(f1) is not None else num(f2) or 0) + (num(f3) or 0), "trust": num(trust) or 0}
+        for k, v in nets.items():
+            last_i, n, total = state.get((code, k), (None, 0, 0))
+            if v > 0:
+                n, total = (n + 1, total + v) if last_i == idx[day] - 1 and n else (1, v)
+            else:
+                n, total = 0, 0
+            state[(code, k)] = (idx[day], n, total)
+            if day in targets and n:
+                out[day][k].append((code, n, round(total / 1000)))
     return out
+
+
+class Revenue:
+    """月營收年增率排行與營收創新高（上市一般股票，當月營收至少 1 億元）；每個月份只算一次"""
+
+    def __init__(self, con, have):
+        self.rows = defaultdict(list)    # 年月 -> [(代號, 名稱, 營收, 年增, 月增)]
+        if "monthly_revenue" in have:
+            for code, name, ym, rev, yoy, mom in con.execute(
+                    'SELECT "公司代號", "公司名稱", _key, "營業收入-當月營收", "營業收入-去年同月增減(%)", '
+                    '"營業收入-上月比較增減(%)" FROM monthly_revenue'):
+                if num(rev) is not None and is_stock(str(code).strip()):
+                    self.rows[ym].append((str(code).strip(), name, num(rev), num(yoy), num(mom)))
+        self.months = sorted(self.rows)
+        self.cache = {}
+
+    def month_before(self, day):
+        """這天能看到的最新月份：交易日所在月份的前一個月以前（當月營收要到下個月 10 日前才公布完）"""
+        return next((m for m in reversed(self.months) if m < day[:7]), None)
+
+    def ranked(self, month):
+        if month not in self.cache:
+            best = {}
+            for m in self.months:
+                if m >= month:
+                    break
+                for code, _, rev, _, _ in self.rows[m]:
+                    best[code] = (max(best.get(code, (0, 0))[0], rev), best.get(code, (0, 0))[1] + 1)
+            items = [r for r in self.rows[month] if r[2] >= 1e5]   # 千元
+            highs = sorted((r for r in items if best.get(r[0], (0, 0))[1] >= 36 and r[2] > best[r[0]][0]),
+                           key=lambda r: -r[2])   # 至少有 3 年的紀錄才算創新高
+            self.cache[month] = (sorted((r for r in items if r[3] is not None), key=lambda r: -r[3]), highs)
+        return self.cache[month]
+
+    def lists(self, day, stocks):
+        month = self.month_before(day)
+        if month is None:
+            return None
+        yoy, highs = self.ranked(month)
+        item = lambda r: {"code": r[0], "name": (stocks.get(r[0]) or {}).get("name") or r[1],  # noqa: E731
+                          "close": (stocks.get(r[0]) or {}).get("close"), "pct": (stocks.get(r[0]) or {}).get("pct"),
+                          "revenue": round(r[2] / 1e5, 2), "yoy": r[3] if r[3] is None else round(r[3], 2),
+                          "mom": r[4] if r[4] is None else round(r[4], 2)}
+        return {"month": month, "yoy": [item(r) for r in yoy[:TOP]],
+                "high": {"count": len(highs), "items": [item(r) for r in highs[:TOP]]}}
 
 
 # ---- 單日報告 ----
@@ -160,7 +271,7 @@ def stock_list(stocks, codes, limit):
     return [{k: s[k] for k in ("code", "name", "close", "pct", "value")} for s in items[:limit]]
 
 
-def day_report(con, have, day, prev_close, signals):
+def day_report(con, have, day, prev_close, signals, breadth, streaks, revenue):
     t = query(con, "SELECT * FROM taiex WHERE _key = ?", day)[0]
     close = num(t["ClosingIndex"])
     change = close - prev_close if prev_close else None
@@ -173,14 +284,14 @@ def day_report(con, have, day, prev_close, signals):
 
     # 個股行情
     stocks = {}
-    for r in query(con, 'SELECT Code, Name, ClosingPrice, Change, TradeValue FROM stock_day_all WHERE _key = ?', day):
+    for r in query(con, 'SELECT Code, Name, ClosingPrice, Change, TradeValue, TradeVolume FROM stock_day_all WHERE _key = ?', day):
         c, chg = num(r["ClosingPrice"]), num(r["Change"])
         base = c - chg if c is not None and chg is not None else None
         stocks[r["Code"]] = {
             "code": r["Code"], "name": r["Name"], "close": c,
             "pct": round(chg / base * 100, 2) if base else None,
             "value": round((num(r["TradeValue"]) or 0) / YI, 4),   # 億；小型股要到百萬位才看得出差異
-            "chg": chg,
+            "chg": chg, "volume": num(r["TradeVolume"]) or 0,
         }
     traded = [s for s in stocks.values() if s["close"] is not None and s["chg"] is not None]
     market["turnover"] = round(sum(s["value"] for s in stocks.values()), 1)
@@ -245,6 +356,38 @@ def day_report(con, have, day, prev_close, signals):
         lists["margin_down"] = [{"code": i["code"], "name": i["name"], "change": i["fin"], "balance": i["balance"]}
                                 for i in sorted(stocks_only, key=lambda i: i["fin"])[:TOP]]
 
+    info = lambda code: {"code": code, "name": stocks[code]["name"], "close": stocks[code]["close"],  # noqa: E731
+                         "pct": stocks[code]["pct"]}
+    # 外資、投信連買天數（天數相同時累計買超張數多的在前）
+    for k, rows in (streaks.get(day) or {}).items():
+        rows = sorted((r for r in rows if r[0] in stocks), key=lambda r: (-r[1], -r[2]))[:TOP]
+        lists[f"{k}_streak"] = [{**info(code), "days": n, "lots": total} for code, n, total in rows]
+
+    # 借券賣出餘額增減（張；晚上才公布）
+    rows = query(con, "SELECT * FROM sbl_short WHERE _key = ?", day) if "sbl_short" in have else []
+    if rows:
+        items = []
+        for r in rows:
+            code = str(r["代號"]).strip()
+            if is_stock(code) and code in stocks:
+                bal = num(r["借券賣出當日餘額"]) or 0
+                items.append({**info(code), "change": round((bal - (num(r["借券賣出前日餘額"]) or 0)) / 1000),
+                              "balance": round(bal / 1000)})
+        lists["sbl_up"] = sorted(items, key=lambda i: -i["change"])[:TOP]
+        lists["sbl_down"] = sorted(items, key=lambda i: i["change"])[:TOP]
+
+    # 當沖比率：當沖成交股數 / 成交股數（成交金額至少 1 億，避免冷門股）
+    rows = query(con, "SELECT * FROM day_trading WHERE _key = ?", day) if "day_trading" in have else []
+    if rows:
+        items = []
+        for r in rows:
+            code = str(r["證券代號"]).strip()
+            s = stocks.get(code)
+            if is_stock(code) and s and s["volume"] and s["value"] * YI >= SIGNAL_MIN_VALUE:
+                items.append({**info(code), "ratio": round((num(r["當日沖銷交易成交股數"]) or 0) / s["volume"] * 100, 2),
+                              "value": round(s["value"], 2)})
+        lists["day_trading"] = sorted(items, key=lambda i: -i["ratio"])[:TOP]
+
     # 除權息
     ex = []
     if "ex_rights" in have:
@@ -253,18 +396,24 @@ def day_report(con, have, day, prev_close, signals):
                        "amount": num(r["權值+息值"]), "before": num(r["除權息前收盤價"]),
                        "ref": num(r["除權息參考價"])})
 
-    sig = signals.get(day, {})
+    sig = dict(signals.get(day, {}))
+    # 爆量依當天漲跌分開（跟個股頁一樣用證交所公布的漲跌）；volume 是兩者合計，保留給舊的讀取程式
+    vol = sig.get("volume", [])
+    sig["volume_up"] = [c for c in vol if (stocks.get(c) or {}).get("chg", 0) > 0]
+    sig["volume_down"] = [c for c in vol if (stocks.get(c) or {}).get("chg", 0) < 0]
     return {
         "version": REPORT_VERSION,
         "date": day,
         "market": market,
+        "breadth": breadth.get(day),
         "institutional": inst,
         "margin": margin,
         "sectors": sectors(con, have, day),
         **flagged(con, have, day, stocks),
         "lists": lists,
+        "revenue": revenue.lists(day, stocks),
         "signals": {k: {"count": len(sig.get(k, [])), "items": stock_list(stocks, sig.get(k, []), SIGNAL_TOP)}
-                    for k in ("new_high", "golden", "death", "volume")},
+                    for k in SIGNAL_KEYS},
         "ex_rights": ex,
     }
 
@@ -284,6 +433,10 @@ def needs_update(day):
     later = (("margin", "margin"), ("institutional", "institutional"), ("institutional", "institutional_amount"),
              ("sectors", "sector_index"), ("notice", "notice"), ("disposition", "disposition"))
     if any(old.get(key) is None and has_file(table, day) for key, table in later):
+        return True
+    # 借券賣出、當沖晚上才公布，排行是之後才有的
+    if any(key not in (old.get("lists") or {}) and has_file(table, day)
+           for key, table in (("sbl_up", "sbl_short"), ("day_trading", "day_trading"))):
         return True
     return bool((old.get("institutional") or {}).get("estimated") and has_file("institutional_amount", day))
 
@@ -378,8 +531,14 @@ def discord_embed(report, page_url):
                    f"融資 {fmt_signed(mg['financing'])}\n融券 {fmt_signed(mg['short'])}" if mg else "尚未公布"})
     sig = report["signals"]
     fields.append({"name": "技術訊號（檔）", "inline": True, "value":
-                   f"60 日新高 {sig['new_high']['count']}\n黃金交叉 {sig['golden']['count']}\n"
-                   f"死亡交叉 {sig['death']['count']}\n爆量 {sig['volume']['count']}"})
+                   f"60 日新高 {sig['new_high']['count']}・新低 {sig['new_low']['count']}\n"
+                   f"黃金交叉 {sig['golden']['count']}・死亡交叉 {sig['death']['count']}\n"
+                   f"爆量上漲 {sig['volume_up']['count']}・下跌 {sig['volume_down']['count']}"})
+    b = report.get("breadth")
+    if b:
+        fields.append({"name": "市場寬度", "inline": True, "value":
+                       f"站上 MA20 {b['above_ma20']}%・MA60 {b['above_ma60']}%\n"
+                       f"漲停 {b['limit_up']}・跌停 {b['limit_down']}"})
     secs = [x for x in report.get("sectors") or [] if not x["group"]]
     if secs:
         fmt = lambda x: f"{x['name']} {fmt_signed(x['pct'], 2, '%')}"  # noqa: E731
@@ -454,26 +613,37 @@ def main() -> int:
     had_margin = day_path(latest).exists() and load_day(latest).get("margin") is not None
     print(f"共 {len(days)} 個交易日，這次要產生 {len(targets)} 份報告")
 
-    signals = scan_signals(con, targets) if targets else {}
+    signals, breadth = scan_market(con, targets)
+    streaks = scan_streaks(con, have, days, targets) if targets else {}
+    revenue = Revenue(con, have)
     for day in sorted(targets):
-        report = day_report(con, have, day, prev_close[day], signals)
+        report = day_report(con, have, day, prev_close[day], signals, breadth, streaks, revenue)
         out = day_path(day)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(report, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    # 全市場融資餘額（張，含 ETF）
+    financing = {}
+    if "margin" in have:
+        financing = {d: int(v) for d, v in con.execute(
+            'SELECT _key, SUM(CAST("融資今日餘額" AS INTEGER)) FROM margin GROUP BY _key') if v is not None}
     print(f"已產生 {stock_data.build(con, have)} 檔個股資料（site/data/stocks/、site/data/summary/）")
     write_latest(con, have, latest)
     con.close()
 
-    # 給網頁圖表用的每日摘要
+    # 給網頁圖表用的每日摘要：大盤、法人，以及市場寬度（a20 / a60：站上 MA20 / MA60 的 %，nh / nl：60 日新高 / 新低家數，
+    # ad：上漲減下跌家數，lu / ld：漲停 / 跌停家數；都只算上市一般股票）、融資餘額 mf（張）
     index = []
     for day in days:
         if not day_path(day).exists():
             continue
         r = load_day(day)
-        m, inst = r["market"], r["institutional"] or {}
+        m, inst, b = r["market"], r["institutional"] or {}, breadth.get(day) or {}
         index.append({"d": day, "o": m["open"], "h": m["high"], "l": m["low"], "c": m["close"],
                       "v": m["turnover"], "f": inst.get("foreign"), "t": inst.get("trust"),
-                      "dl": inst.get("dealer")})
+                      "dl": inst.get("dealer"), "a20": b.get("above_ma20"), "a60": b.get("above_ma60"),
+                      "nh": b.get("new_high"), "nl": b.get("new_low"),
+                      "ad": None if not b else b["up"] - b["down"], "lu": b.get("limit_up"), "ld": b.get("limit_down"),
+                      "mf": financing.get(day)})
     (SITE / "data" / "index.json").write_text(json.dumps(index, ensure_ascii=False, separators=(",", ":")),
                                                encoding="utf-8")
     print(f"已更新 site/data/index.json（{len(index)} 天）")

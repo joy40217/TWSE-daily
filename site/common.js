@@ -13,6 +13,25 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 const timeKey = (t) => (typeof t === "string" ? t : `${t.year}-${String(t.month).padStart(2, "0")}-${String(t.day).padStart(2, "0")}`);
 const stockLink = (code, text = code) => `<a class="stock" href="stock.html#${encodeURIComponent(code)}">${esc(text)}</a>`;
 
+// 自選股：只存在這個瀏覽器（localStorage），不會上傳，也不在 repo 或網站上。無痕視窗、封鎖網站資料時存不了，當成空的
+const WATCH_KEY = "twse-daily-watchlist";
+function loadWatchlist() {
+  try {
+    const list = JSON.parse(localStorage.getItem(WATCH_KEY));
+    return Array.isArray(list) ? list.filter((c) => typeof c === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function saveWatchlist(list) {
+  try {
+    localStorage.setItem(WATCH_KEY, JSON.stringify(list));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function getJSON(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${url}：HTTP ${r.status}`);
