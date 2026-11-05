@@ -7,7 +7,8 @@
   python scripts/backfill.py 2026-01-01 --only tpex                 # 只補上櫃（全部 tpex_ 資料集）
 
 可回補 fetch.py 裡所有網站來源的資料集（上市與 tpex_ 開頭的上櫃），以及從公開資訊觀測站回補月營收
-（monthly_revenue、tpex_monthly_revenue）、季報綜合損益表（income_statement、tpex_income_statement）；
+（monthly_revenue、tpex_monthly_revenue）、季報綜合損益表（income_statement、tpex_income_statement）、
+資產負債表（balance_sheet、tpex_balance_sheet）；
 holiday_schedule、ex_rights_forecast、tpex_ex_rights_forecast、shareholding 沒有歷史查詢。
 抓取與轉換都用 fetch.py 的函式，回補的檔案跟每日抓的格式完全相同。
 已存在的檔案會略過，中斷後重跑會從缺的地方接著補。

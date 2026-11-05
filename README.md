@@ -23,6 +23,7 @@
 | `sbl_short/` | 借券賣出餘額（含融券，單位：股） | [信用額度總量管制餘額表](https://www.twse.com.tw/zh/trading/margin/twt93u.html) |
 | `monthly_revenue/` | 上市公司月營收（依資料年月存檔） | [OpenAPI](https://openapi.twse.com.tw/) 上市公司每月營業收入彙總表；歷史月份從[公開資訊觀測站](https://mopsov.twse.com.tw/nas/t21/sii/t21sc03_115_9_0.html)回補 |
 | `income_statement/` | 季報綜合損益表（`<年>-Q<季>.csv`，金額千元，當年累計） | [公開資訊觀測站](https://mopsov.twse.com.tw/mops/web/t163sb04) 綜合損益表彙總 |
+| `balance_sheet/` | 季報資產負債表（`<年>-Q<季>.csv`，金額千元，季底餘額） | [公開資訊觀測站](https://mopsov.twse.com.tw/mops/web/t163sb05) 資產負債表彙總 |
 | `shareholding/` | 集保戶股權分散表（每週一份，只留上市、上櫃股票與 ETF） | [集保結算所開放資料](https://opendata.tdcc.com.tw/) 集保戶股權分散表 |
 | `holiday_schedule/` | 休市日程（只保留最新一份） | [OpenAPI](https://openapi.twse.com.tw/) 有價證券集中交易市場開（休）市日期 |
 
@@ -44,6 +45,7 @@
 | `tpex_sbl_short/` | 借券賣出餘額（含融券，單位：股） | [融券借券賣出餘額](https://www.tpex.org.tw/zh-tw/mainboard/trading/margin-trading/sbl.html) |
 | `tpex_monthly_revenue/` | 上櫃公司月營收 | [OpenAPI](https://www.tpex.org.tw/openapi/) 上櫃公司每月營業收入彙總表；歷史月份從[公開資訊觀測站](https://mopsov.twse.com.tw/nas/t21/otc/t21sc03_115_9_0.html)回補 |
 | `tpex_income_statement/` | 上櫃季報綜合損益表 | [公開資訊觀測站](https://mopsov.twse.com.tw/mops/web/t163sb04) 綜合損益表彙總（上櫃） |
+| `tpex_balance_sheet/` | 上櫃季報資產負債表 | [公開資訊觀測站](https://mopsov.twse.com.tw/mops/web/t163sb05) 資產負債表彙總（上櫃） |
 
 櫃買中心的交易日跟證交所相同，所以也用加權指數的日期判斷要查哪幾天。
 上櫃三大法人的同名欄位依位置對應（外資自營商分開列以前 16 欄、之後 24 欄），外資合計等上市沒有的欄位不存；
@@ -172,7 +174,7 @@
 - K 線下方副圖可切換成交量（含 5 / 20 日均量）、MACD(12, 26, 9)、KD(9)、RSI(6, 12)、OBV，指標依目前顯示的價格計算
 - 三大法人買賣超、融資融券餘額（含融資使用率）、當沖比率 / 借券賣出餘額 / 千張與 400 張大戶持股、
   本益比 / 殖利率 / 淨值比走勢與本益比河流圖，跟 K 線同步縮放
-- 月營收（年增、月增、累計年增）、季報（單季 EPS、毛利率、營益率、淨利率）、除權息紀錄，以及 Yahoo 股市的外部連結
+- 月營收（年增、月增、累計年增）、季報（單季 EPS、淨利、毛利率、營益率、淨利率；分頁切換單季與近四季 ROE）、除權息紀錄，以及 Yahoo 股市的外部連結
 - 技術訊號：條件跟收盤報告相同，但成交金額不到 1 億的日子也列出（灰字）；爆量分成上漲、下跌，並列出之後 5 / 20 日的報酬
 - 訊號歷史表現：每種訊號之後 5 / 20 日上漲的比例與平均報酬，跟「所有交易日」比較
 - 事件紀錄：注意股（含原因）、處置期間、無成交的日子
@@ -196,6 +198,7 @@
 個股頁與摘要會修正這段期間：以「收盤價 ÷ 本益比」反推的每股盈餘（淨值比、殖利率同理）跟除權前一樣，
 就表示官方還沒換，依配股倍數（1 + 每千股配股 / 1000）修正；官方換了之後就不再修正。
 季報的 EPS 也依之後的配股換算成現在的股數，配股前後的季度才能相加、相減。
+ROE（股東權益報酬率）用歸屬母公司的淨利 ÷ 期初期末平均的歸屬母公司權益，不年化：單季的期初是上一季底，近四季的期初是四季前的季底。
 配股倍數上市來自 `ex_rights_detail`、上櫃來自 `tpex_ex_rights`；CSV 與 `twse.db` 裡的仍是官方原始數字。
 
 ### 給排程任務讀的資料
@@ -206,7 +209,7 @@
 |---|---|
 | `data/latest.json` | 最新交易日 `date`、產生時間 `generated_at`、各資料是否已公布 `available`（例如 `margin: false` 表示融資融券還沒出來）、除權息預告 |
 | `data/days/<年>/<日期>.json` | 單日報告：大盤、市場寬度 `breadth`、三大法人、融資融券、排行 `lists`、月營收排行 `revenue`、類股、注意 / 處置股、技術訊號 `signals`（`new_high`、`new_low`、`golden`、`death`、`volume_up`、`volume_down`；`volume` 是爆量上漲加下跌，保留給舊的讀取程式） |
-| `data/summary/<代號>.json` | 個股摘要（約 3 KB，上市、上櫃都有，`market` 標示是哪一個）：最新行情、均線（還原 `ma` 與原始 `ma_raw`）、60 日高低（還原收盤 `high_60` / `low_60` 與原始盤中 `range_60`）、風險指標 `risk`（ATR、波動率、回檔、相對大盤；`rs_index` 是比較的指數）、三大法人與連買連賣天數、5 / 20 日法人合計、融資融券與融資使用率、當沖比率 `day_trading`、借券賣出 `sbl_short`、千張大戶 `shareholding`、最新一季財報 `financials`、本益比（配股後已修正，見上方說明）、月營收（年增、月增、累計）、注意 / 處置、除權息預告、最近 20 天走勢；`basis` 欄位說明哪些數字用還原權息價 |
+| `data/summary/<代號>.json` | 個股摘要（約 3 KB，上市、上櫃都有，`market` 標示是哪一個）：最新行情、均線（還原 `ma` 與原始 `ma_raw`）、60 日高低（還原收盤 `high_60` / `low_60` 與原始盤中 `range_60`）、風險指標 `risk`（ATR、波動率、回檔、相對大盤；`rs_index` 是比較的指數）、三大法人與連買連賣天數、5 / 20 日法人合計、融資融券與融資使用率、當沖比率 `day_trading`、借券賣出 `sbl_short`、千張大戶 `shareholding`、最新一季財報 `financials`（含淨利 `net_income`、歸屬母公司權益 `equity`、單季 / 近四季 ROE `roe` / `roe_4q`）、本益比（配股後已修正，見上方說明）、月營收（年增、月增、累計）、注意 / 處置、除權息預告、最近 20 天走勢；`basis` 欄位說明哪些數字用還原權息價 |
 
 建議任務先讀 `latest.json`，確認 `date` 是當天、需要的資料 `available` 為 true，再讀其他檔案，
 避免把前一天的數字當成今天的。自選股清單放在任務那一端就好：每一檔股票都有摘要，
@@ -237,7 +240,7 @@
     python scripts/backfill.py 2025-01-01 --only institutional,margin   # 只補部分資料集
 
 - 可回補上表中所有「網站」來源的資料集（上市與 `tpex_` 開頭的上櫃），以及從公開資訊觀測站回補月營收、季報
-  （`--only monthly_revenue,income_statement`，2016 年起約 20 分鐘；上櫃是 `tpex_monthly_revenue,tpex_income_statement`）；
+  （`--only monthly_revenue,income_statement,balance_sheet`，2016 年起約 20 分鐘；上櫃是 `tpex_monthly_revenue,tpex_income_statement,tpex_balance_sheet`）；
   集保股權分散、除權息預告沒有歷史資料可補。格式跟每日抓的完全相同
 - 已存在的檔案會略過，中斷後重跑即可接著補
 - 每次查詢間隔 3 秒，連續失敗 5 次（多半是被證交所、櫃買中心暫時封鎖）會自動停止

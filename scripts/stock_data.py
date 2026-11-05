@@ -19,9 +19,10 @@
     dtr       當沖比率（%）：當沖成交股數 / 成交股數；那天有當沖資料但不在名單上為 0
     sb        借券賣出餘額（張）
     sh        集保股權分散（每週）[[資料日期, 千張以上持股 %, 400 張以上持股 %, 股東人數, 千張以上人數], ...]
-    fin       季報（單季，千元）[[季度, 營收, 營業毛利, 營業利益, 歸屬母公司淨利, 每股盈餘], ...]；
-              公開資訊觀測站是當年累計，這裡減去前一季累計換算成單季，前一季沒有資料時為 null；
-              EPS 依之後的配股換算成現在的股數（見 quarterly()）
+    fin       季報（單季，千元）[[季度, 營收, 營業毛利, 營業利益, 歸屬母公司淨利, 每股盈餘,
+               歸屬母公司權益, 單季 ROE %, 近四季 ROE %], ...]；
+              損益是當年累計，這裡減去前一季累計換算成單季，前一季沒有資料時為 null；
+              EPS 依之後的配股換算成現在的股數（見 quarterly()）；權益是季底餘額，ROE 見 with_equity()
 
 另外每檔產生一份精簡摘要 site/data/summary/<代號>.json（約 1～2 KB），給排程任務直接讀最新狀態，
 不必下載完整歷史；每一檔都有，所以看不出使用者追蹤哪些股票。欄位見 summary()。
@@ -180,6 +181,33 @@ def quarterly(rows, events=()):
     return out
 
 
+# 資產負債表：歸屬母公司業主的權益（各業別、各年度名稱不同；沒有拆分的公司用權益總額）
+EQUITY_COLS = ("歸屬於母公司業主之權益合計", "歸屬於母公司業主權益合計", "歸屬於母公司業主之權益",
+               "權益總額", "權益總計", "權益合計")
+
+
+def shift_quarter(k, n):
+    """'2026-Q2' 往前 n 季"""
+    i = int(k[:4]) * 4 + int(k[-1]) - 1 - n
+    return f"{i // 4}-Q{i % 4 + 1}"
+
+
+def with_equity(fin, rows):
+    """每一季加上歸屬母公司權益（千元）、單季 ROE、近四季 ROE（%，不年化）：
+    單季 ROE = 單季淨利 ÷ 期初期末平均權益（上一季底與這一季底）；
+    近四季 ROE = 最近四季淨利合計 ÷ 四季前與這一季底的平均權益。少了期初就只用期末；權益不是正數不算"""
+    equity = {k: first(r, *EQUITY_COLS) for k, r in rows.items()}
+    net = {q[0]: q[4] for q in fin}
+
+    def roe(k, n):
+        ni = [net.get(shift_quarter(k, j)) for j in range(n)]
+        end, begin = equity.get(k), equity.get(shift_quarter(k, n))
+        base = end if begin is None or end is None else (begin + end) / 2
+        return None if None in ni or not base or base <= 0 else round(sum(ni) / base * 100, 2)
+
+    return [q + [equity.get(q[0]), roe(q[0], 1), roe(q[0], 4)] for q in fin]
+
+
 def holders(rows):
     """一檔股票各週的股權分散 rows -> [[日期, 千張以上 %, 400 張以上 %, 股東人數, 千張以上人數], ...]
     持股分級 12～15 是 400 張以上，15 是千張以上，17 是合計"""
@@ -256,7 +284,8 @@ def stock_json(con, have, code, days, dt_days):
             con.row_factory = None
     else:
         out["sh"] = []
-    out["fin"] = quarterly(by_code(con, have, "income_statement", "公司代號", code), events)
+    out["fin"] = with_equity(quarterly(by_code(con, have, "income_statement", "公司代號", code), events),
+                             by_code(con, have, "balance_sheet", "公司代號", code))
 
     # 去掉整欄都沒資料的欄位（例如 ETF 沒有本益比），減少檔案大小
     for k in [k for k, v in out.items() if isinstance(v, list) and v and all(x is None for x in v)]:
@@ -402,11 +431,12 @@ def summary(con, have, data, adj, latest, forecast, generated_at, taiex):
     # 季報：最新一季（單季）與近四季 EPS 合計
     fin = [q for q in data.get("fin") or [] if q[5] is not None]
     if fin:
-        quarter, revenue, gross, op, net, eps = fin[-1]
+        quarter, revenue, gross, op, net, eps, equity, roe, roe_4q = fin[-1]
         margin = lambda v: None if v is None or not revenue else round(v / revenue * 100, 2)  # noqa: E731
-        out["financials"] = {"quarter": quarter, "revenue": revenue, "eps": eps, "gross_margin": margin(gross),
-                             "operating_margin": margin(op), "net_margin": margin(net),
-                             "eps_4q": round(sum(q[5] for q in fin[-4:]), 2) if len(fin) >= 4 else None}
+        out["financials"] = {"quarter": quarter, "revenue": revenue, "net_income": net, "eps": eps,
+                             "gross_margin": margin(gross), "operating_margin": margin(op), "net_margin": margin(net),
+                             "eps_4q": round(sum(q[5] for q in fin[-4:]), 2) if len(fin) >= 4 else None,
+                             "equity": equity, "roe": roe, "roe_4q": roe_4q}
     else:
         out["financials"] = None
 
@@ -458,7 +488,7 @@ def build(con, have):
     for table, col in (("stock_day_all", "Code"), ("institutional", "證券代號"), ("margin", "股票代號"), ("bwibbu_all", "Code"),
                        ("ex_rights", "股票代號"), ("monthly_revenue", "公司代號"),
                        ("notice", "證券代號"), ("disposition", "證券代號"), ("day_trading", "證券代號"),
-                       ("sbl_short", "代號"), ("shareholding", "證券代號"), ("income_statement", "公司代號"),
+                       ("sbl_short", "代號"), ("shareholding", "證券代號"), ("income_statement", "公司代號"), ("balance_sheet", "公司代號"),
                        ("ex_rights_detail", "股票代號")):
         for t in (table, f"tpex_{table}"):
             if t in have:

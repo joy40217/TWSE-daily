@@ -9,7 +9,7 @@
   櫃買中心網站（www.tpex.org.tw/www/zh-tw）：上櫃的行情、本益比、融資融券、三大法人、注意股、處置股、
       當日沖銷、借券賣出、除權息、櫃買指數；OpenAPI：上櫃月營收、除權息預告
       → 資料集名稱加 tpex_ 前綴，欄位轉成對應的上市資料集格式
-  公開資訊觀測站（mopsov.twse.com.tw）：上市、上櫃季報綜合損益表；歷史月營收（回補用）
+  公開資訊觀測站（mopsov.twse.com.tw）：上市、上櫃季報綜合損益表、資產負債表；歷史月營收（回補用）
   集保結算所開放資料：集保戶股權分散表（每週一份，只能取得最新一週，從開始抓的那週起累積）
 
 網站資料一律轉成跟 OpenAPI 相同的欄位格式，新舊檔案可以混用。
@@ -479,10 +479,11 @@ def monthly_revenue_history(month: str, market: str = "sii"):
     return rows
 
 
-def income_statement(year: int, season: int, market: str = "sii"):
-    """公開資訊觀測站綜合損益表彙總。year 為西元年；market 是 sii（上市）或 otc（上櫃）。
-    金額單位千元，都是當年累計（第 2 季是上半年合計）；各業別欄位不同，合併成同一張表。還沒有資料回傳 []"""
-    html = get_text(f"{MOPS}/mops/web/ajax_t163sb04", data={
+def mops_summary(page: str, year: int, season: int, market: str = "sii"):
+    """公開資訊觀測站的財報彙總表（page：t163sb04 綜合損益表、t163sb05 資產負債表）。
+    year 為西元年；market 是 sii（上市）或 otc（上櫃）；金額單位千元。
+    各業別（一般業、金融、保險…）分成好幾張表、欄位不同，合併成同一張表。還沒有資料回傳 []"""
+    html = get_text(f"{MOPS}/mops/web/ajax_{page}", data={
         "encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "isQuery": "Y",
         "TYPEK": market, "year": year - 1911, "season": f"{season:02d}"})
     time.sleep(PAUSE)
@@ -496,6 +497,16 @@ def income_statement(year: int, season: int, market: str = "sii"):
                 rows.append({"公司代號": cells[0], "公司名稱": cells[1],
                              **{h: num(v) for h, v in zip(heads[2:], cells[2:])}})
     return rows
+
+
+def income_statement(year: int, season: int, market: str = "sii"):
+    """綜合損益表彙總：都是當年累計（第 2 季是上半年合計）"""
+    return mops_summary("t163sb04", year, season, market)
+
+
+def balance_sheet(year: int, season: int, market: str = "sii"):
+    """資產負債表彙總：季底的餘額（不是累計）"""
+    return mops_summary("t163sb05", year, season, market)
 
 
 def recent_quarters(n=2):
@@ -807,6 +818,7 @@ DATASETS = {
     "holiday_schedule": {"url": OPENAPI + "/holidaySchedule/holidaySchedule", "mode": "snapshot"},  # 休市日程
     # 季報、集保不是證交所的網站，連不上時只顯示警告、不算失敗，下次執行再試
     "income_statement": {"by_quarter": income_statement, "optional": True},   # 季報綜合損益表（當年累計）
+    "balance_sheet":    {"by_quarter": balance_sheet, "optional": True},      # 季報資產負債表（季底餘額）
     # 上櫃（櫃買中心），跟上面對應的上市資料集相同格式與更新規則；交易日跟上市相同，所以也用加權指數的日期
     "tpex_index":         {"by_month": tpex_index},                              # 櫃買指數日 K
     "tpex_stock_day_all": {"by_day": tpex_stock_day_all, "refresh": True},
@@ -822,6 +834,7 @@ DATASETS = {
     "tpex_monthly_revenue": {"url": TPEX_OPENAPI + "/mopsfin_t187ap05_O", "mode": "monthly",
                              "history": partial(monthly_revenue_history, market="otc")},
     "tpex_income_statement": {"by_quarter": partial(income_statement, market="otc"), "optional": True},
+    "tpex_balance_sheet":    {"by_quarter": partial(balance_sheet, market="otc"), "optional": True},
     # 放在上市、上櫃行情之後：只留最新行情裡有的股票
     "shareholding":     {"weekly": shareholding, "optional": True},           # 集保戶股權分散表（每週）
 }

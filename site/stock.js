@@ -650,9 +650,12 @@ function padded(chart) {
 }
 const pad = (n) => Math.max(1, n / 25);
 
-// 季報：每季營收與 EPS（長條）、毛利率、營益率、淨利率（左軸 %）；資料為單季
+// 季報：每季 EPS（長條）；分頁切換毛利率、營益率、淨利率，或單季、近四季 ROE（左軸 %）；資料為單季
 const qTime = (q) => `${q.slice(0, 4)}-${String((+q.slice(-1) - 1) * 3 + 1).padStart(2, "0")}-01`;
 const margins = ([, rev, gross, op, net]) => [gross, op, net].map((v) => (v == null || !rev ? null : (v / rev) * 100));
+
+const FIN_TABS = [["margin", "獲利率"], ["roe", "ROE"]];
+let finTab = "margin";
 
 function buildFinChart() {
   const fin = S.fin.filter((q) => q[5] != null);
@@ -660,19 +663,37 @@ function buildFinChart() {
   const chart = LightweightCharts.createChart($("chart-fin"), chartOptions());
   padded(chart);
   const up = css("--up"), down = css("--down");
-  const list = [chart.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false })];
-  list[0].setData(fin.map((q) => ({ time: qTime(q[0]), value: q[5], color: (q[5] >= 0 ? up : down) + "aa" })));
-  ["--ma5", "--ma20", "--ma60"].forEach((color, k) => {
+  const bars = chart.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false });
+  bars.setData(fin.map((q) => ({ time: qTime(q[0]), value: q[5], color: (q[5] >= 0 ? up : down) + "aa" })));
+  const line = (color, values) => {
     const s = chart.addLineSeries({ ...LINE, lineWidth: 2, color: css(color), priceScaleId: "left", pointMarkersVisible: true });
-    s.setData(fin.map((q) => {
-      const v = margins(q)[k];
-      return v == null ? { time: qTime(q[0]) } : { time: qTime(q[0]), value: +v.toFixed(2) };
-    }));
-    list.push(s);
-  });
+    s.setData(fin.map((q, i) => (values[i] == null ? { time: qTime(q[0]) } : { time: qTime(q[0]), value: +values[i].toFixed(2) })));
+    return s;
+  };
+  const lines = {
+    margin: ["--ma5", "--ma20", "--ma60"].map((color, k) => line(color, fin.map((q) => margins(q)[k]))),
+    roe: [line("--ma20", fin.map((q) => q[7] ?? null)), line("--trust", fin.map((q) => q[8] ?? null))],
+  };
   chart.timeScale().setVisibleLogicalRange({ from: -pad(fin.length), to: fin.length });
-  mains.set(chart, () => list);
-  linkCharts([[chart, $("chart-fin")]], { times: fin.map((q) => qTime(q[0])), legend: (i) => showFinLegend(i == null ? null : qTime(fin[i][0])) });
+  mains.set(chart, () => [bars, ...lines[finTab]]);
+  const link = linkCharts([[chart, $("chart-fin")]], { times: fin.map((q) => qTime(q[0])), legend: (i) => showFinLegend(i == null ? null : qTime(fin[i][0])) });
+  // 有權益資料（資產負債表）才有 ROE 分頁
+  const keys = FIN_TABS.filter(([k]) => k !== "roe" || fin.some((q) => q[8] != null || q[7] != null));
+  const tabs = $("fin-tabs");
+  const show = (key) => {
+    finTab = key;
+    for (const [k, list] of Object.entries(lines)) for (const s of list) s.applyOptions({ visible: k === key });
+    tabs.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.fin === key));
+    $("fin-note").innerHTML = key === "roe" ?
+      `線為<span class="ma20">單季 ROE</span>、<span class="trust">近四季 ROE</span> %（左軸，不年化）：歸屬母公司淨利 ÷ 期初期末平均的歸屬母公司權益；` +
+      "單季的期初是上一季底，近四季的期初是四季前的季底。權益是負的不計算。" :
+      `線為<span class="ma5">毛利率</span>、<span class="ma20">營益率</span>、<span class="ma60">淨利率</span> %（左軸）。`;
+    showFinLegend(null);
+    link?.place?.();
+  };
+  tabs.innerHTML = keys.length < 2 ? "" : keys.map(([k, label]) => `<button type="button" data-fin="${k}">${label}</button>`).join("");
+  tabs.addEventListener("click", (e) => { const b = e.target.closest("[data-fin]"); if (b) show(b.dataset.fin); });
+  show("margin");
   return chart;
 }
 
@@ -778,8 +799,13 @@ function showFinLegend(time) {
   const q = fin.find((x) => qTime(x[0]) === time) || fin[fin.length - 1];
   if (!q) return;
   const [g, o, n] = margins(q);
-  $("legend-fin").innerHTML = `${q[0]}　EPS <b class="${tone(q[5])}">${nf(q[5], 2)}</b>　營收 ${nf(q[1] == null ? null : q[1] / 1e5, 2)} 億` +
-    `　<span class="ma5">毛利率 ${nf(g, 2)}%</span>　<span class="ma20">營益率 ${nf(o, 2)}%</span>　<span class="ma60">淨利率 ${nf(n, 2)}%</span>`;
+  const yi = (v) => nf(v == null ? null : v / 1e5, 2);   // 千元 -> 億元
+  $("legend-fin").innerHTML = `${q[0]}　EPS <b class="${tone(q[5])}">${nf(q[5], 2)}</b>　` +
+    (finTab === "roe" ?
+      `淨利 <span class="${tone(q[4])}">${yi(q[4])}</span> 億　權益 ${yi(q[6])} 億` +
+      `　<span class="ma20">單季 ROE ${nf(q[7] ?? null, 2)}%</span>　<span class="trust">近四季 ROE ${nf(q[8] ?? null, 2)}%</span>` :
+      `營收 ${yi(q[1])} 億　淨利 <span class="${tone(q[4])}">${yi(q[4])}</span> 億` +
+      `　<span class="ma5">毛利率 ${nf(g, 2)}%</span>　<span class="ma20">營益率 ${nf(o, 2)}%</span>　<span class="ma60">淨利率 ${nf(n, 2)}%</span>`);
 }
 
 function showRevLegend(ym) {
@@ -860,6 +886,7 @@ function renderCards() {
   if (f) {
     out.push(card(`EPS（${f.quarter}）`, nf(f.eps, 2),
       (f.eps_4q == null ? "" : `<span class="nowrap">近四季 ${nf(f.eps_4q, 2)}</span><br>`) +
+      (f.roe_4q == null ? "" : `<span class="nowrap">近四季 ROE ${nf(f.roe_4q, 1)}%</span><br>`) +
       [["毛利率", f.gross_margin], ["營益率", f.operating_margin], ["淨利率", f.net_margin]]
         .filter(([, v]) => v != null).map(([k, v]) => `<span class="nowrap">${k} ${nf(v, 1)}%</span>`).join("　"), tone(f.eps)));
   }
