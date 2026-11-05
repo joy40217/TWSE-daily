@@ -195,7 +195,12 @@ button.more:hover { text-decoration: underline; }
 .links button.watch.on { color: var(--trust); border-color: currentColor; }
 button.unwatch { font: inherit; color: var(--muted); background: none; border: 0; cursor: pointer; padding: 0 4px; }
 button.unwatch:hover { color: var(--up); }
-td.flags { white-space: normal; text-align: left; min-width: 8em; }
+/* 自選股表格：每一欄都靠左，標題跟內容的起點一致（最後的移除按鈕仍放在最右邊）；
+   訊號欄吃掉多出來的寬度，畫面拉寬時數字欄不會被拉得很開 */
+#watchlist th, #watchlist td { text-align: left; }
+#watchlist td:last-child { text-align: right; }
+th.flags, td.flags { width: 40%; }
+td.flags { white-space: normal; min-width: 8em; }
 td.flags .badge { display: inline-block; margin: 1px 0; }
 
 .foot { color: var(--muted); font-size: 12px; padding-top: 8px; padding-bottom: 32px; }

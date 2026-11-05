@@ -382,7 +382,7 @@ async function renderWatchlist() {
   }).join("");
   const day = briefs.find(Boolean)?.date;
   el.innerHTML = `<div class="panel-head"><h2>自選股</h2><div class="legend">${day ? `${day} 收盤` : ""}</div></div>` +
-    `<div class="table-scroll"><table><thead><tr><th>代號</th><th>名稱</th><th>收盤</th><th>漲跌%</th><th>外資（張）</th><th>投信（張）</th><th>訊號、提醒</th><th></th></tr></thead>` +
+    `<div class="table-scroll"><table><thead><tr><th>代號</th><th>名稱</th><th>收盤</th><th>漲跌%</th><th>外資（張）</th><th>投信（張）</th><th class="flags">訊號、提醒</th><th></th></tr></thead>` +
     `<tbody>${rows}</tbody></table></div>` +
     `<p class="note">清單只存在這個瀏覽器，不會上傳。顯示最新交易日的資料；技術訊號只有上市股票，而且只比對報告列出的前 20 檔。在個股頁按「★ 已加入自選」可以移除。</p>`;
 }
