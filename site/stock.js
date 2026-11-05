@@ -1005,6 +1005,81 @@ function setupWatchButton() {
   });
 }
 
+// ---- 同業比較 ----
+
+// [欄位, 標題, 小數位數, 顯示方式]：tone 依正負上色，yi 是千元換成億元
+const PEER_COLS = [
+  ["close", "收盤", 2], ["pct", "漲跌%", 2, "tone"], ["ret_3m", "近 3 月%", 2, "tone"],
+  ["pe", "本益比", 2], ["pb", "淨值比", 2], ["dy", "殖利率%", 2],
+  ["eps_4q", "近四季 EPS", 2, "tone"], ["roe_4q", "近四季 ROE%", 2, "tone"],
+  ["gross_margin_4q", "毛利率%", 2], ["net_margin_4q", "淨利率%", 2],
+  ["revenue_yoy", "營收年增%", 2, "tone"], ["revenue_12m", "近 12 月營收（億）", 2, "yi"],
+];
+const PEER_SHOW = 10;   // 同業多的時候先列前幾檔（目前這一檔一定列出）
+
+async function renderPeers() {
+  if (!S.industry) return;
+  let P;
+  try {
+    P = await getJSON(`data/industry/${encodeURIComponent(S.industry)}.json`);
+  } catch {
+    return;
+  }
+  const at = Object.fromEntries(P.fields.map((f, i) => [f, i]));
+  if (P.rows.length < 2) return;
+  $("panel-peers").hidden = false;
+  let key = "revenue_12m", desc = true, expanded = false;
+  const value = (r, k) => r[at[k]];
+  const cell = (r, [k, , digits, kind]) => {
+    const v = value(r, k);
+    if (kind === "yi") return nf(v == null ? null : v / 1e5, digits);
+    return kind === "tone" ? `<span class="${tone(v)}">${signed(v, digits)}</span>` : nf(v, digits);
+  };
+  const draw = () => {
+    // 沒有資料的永遠排在最後
+    const rows = [...P.rows].sort((a, b) => {
+      const x = value(a, key), y = value(b, key);
+      if (x == null || y == null) return (x == null) - (y == null);
+      return desc ? y - x : x - y;
+    });
+    const self = rows.findIndex((r) => r[at.code] === S.code);
+    const label = PEER_COLS.find(([k]) => k === key)[1];
+    const ranked = rows.filter((r) => value(r, key) != null).length;
+    $("legend-peers").innerHTML = `${esc(P.industry)}・${rows.length} 檔・${P.date}` +
+      (self >= 0 && value(rows[self], key) != null ? `　依「${label}」${desc ? "由大到小" : "由小到大"}，${esc(S.name)} 排第 <b>${self + 1}</b> / ${ranked}` : "");
+    const fold = !expanded && rows.length > PEER_SHOW + 3;
+    const shown = rows.map((r, i) => [r, i]).filter(([, i]) => !fold || i < PEER_SHOW || i === self);
+    const head = `<th>排名</th><th>代號</th><th>名稱</th>` + PEER_COLS.map(([k, name]) =>
+      `<th${k === key ? ` aria-sort="${desc ? "descending" : "ascending"}"` : ""}><button type="button" class="sort" data-sort="${k}">` +
+      `${name}${k === key ? (desc ? " ▼" : " ▲") : ""}</button></th>`).join("");
+    let last = -1;
+    const body = shown.map(([r, i]) => {
+      const gap = i > last + 1 ? `<tr class="gap"><td colspan="${PEER_COLS.length + 3}">⋯</td></tr>` : "";
+      last = i;
+      return gap + `<tr${i === self ? ' class="self"' : ""}><td>${value(r, key) == null ? "—" : i + 1}</td>` +
+        `<td>${stockLink(r[at.code])}</td><td class="name" title="${esc(r[at.name])}">${stockLink(r[at.code], r[at.name])}` +
+        `${r[at.market] === "上櫃" ? '<span class="tag">櫃</span>' : ""}</td>` +
+        PEER_COLS.map((c) => `<td>${cell(r, c)}</td>`).join("") + "</tr>";
+    }).join("");
+    const more = rows.length > PEER_SHOW + 3 ?
+      `<button type="button" class="more" data-peers-more>${expanded ? "收合" : `顯示全部 ${rows.length} 檔`}</button>` : "";
+    $("peers").innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>${more}`;
+  };
+  $("peers").addEventListener("click", (e) => {
+    const s = e.target.closest("[data-sort]");
+    if (s) {
+      // 同一欄再點一次反過來；換欄位先由大到小
+      desc = s.dataset.sort === key ? !desc : true;
+      key = s.dataset.sort;
+      draw();
+    } else if (e.target.closest("[data-peers-more]")) {
+      expanded = !expanded;
+      draw();
+    }
+  });
+  draw();
+}
+
 // ---- 載入 ----
 
 async function init() {
@@ -1051,6 +1126,7 @@ async function init() {
   showRevLegend(null);
   if (!$("panel-fin").hidden) showFinLegend(null);
   renderTables();
+  renderPeers();
 
   document.querySelector(".ranges").addEventListener("click", (e) => {
     const b = e.target.closest("button");

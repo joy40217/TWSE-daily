@@ -9,7 +9,7 @@
   2. 為還沒有報告、當時資料不齊（融資融券、三大法人等晚公布），或最近 REFRESH_DAYS 個交易日
      產生 site/data/days/<年>/<日期>.json（會 commit 進 repo）
   3. 重新產生 site/data/index.json（每個交易日的大盤摘要，給網頁圖表用；每次重建，不進 git）
-  4. 重新產生個股頁面資料 site/data/stocks/ 與個股摘要 site/data/summary/（見 stock_data.py；不進 git）
+  4. 重新產生個股頁面資料 site/data/stocks/、個股摘要 site/data/summary/、同業比較 site/data/industry/（見 stock_data.py；不進 git）
   5. 重新產生 site/data/latest.json：最新交易日、產生時間、各資料是否已公布、除權息預告（不進 git）
   6. 最新交易日的報告第一次有融資融券時（當天最後公布的資料），在 GitHub Actions 輸出 new_day=<日期>，
      workflow 會在網頁發布後再送 Discord，避免通知先到、網頁還沒更新；下午先產生的報告不會通知
@@ -626,7 +626,7 @@ def main() -> int:
     if "margin" in have:
         financing = {d: int(v) for d, v in con.execute(
             'SELECT _key, SUM(CAST("融資今日餘額" AS INTEGER)) FROM margin GROUP BY _key') if v is not None}
-    print(f"已產生 {stock_data.build(con, have)} 檔個股資料（site/data/stocks/、site/data/summary/）")
+    print(f"已產生 {stock_data.build(con, have)} 檔個股資料（site/data/stocks/、site/data/summary/、site/data/industry/）")
     write_latest(con, have, latest)
     con.close()
 

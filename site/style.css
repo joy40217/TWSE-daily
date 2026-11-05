@@ -133,10 +133,10 @@ h3 { font-size: 15px; margin: 0 0 8px; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
 
+/* 表格每一欄都靠左，標題跟內容的起點一致（自選股的移除按鈕例外，放在最右邊） */
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th { white-space: nowrap; color: var(--muted); font-weight: 500; font-size: 12px; text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--line); }
-td { padding: 5px 6px; text-align: right; border-bottom: 1px solid var(--grid); white-space: nowrap; }
-th:nth-child(-n+2), td:nth-child(-n+2) { text-align: left; }
+th { white-space: nowrap; color: var(--muted); font-weight: 500; font-size: 12px; text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+td { padding: 5px 6px; text-align: left; border-bottom: 1px solid var(--grid); white-space: nowrap; }
 td.name { max-width: 9em; overflow: hidden; text-overflow: ellipsis; }
 .table-scroll { overflow-x: auto; }
 /* 表格裡的股票、日期可以點：平常淡淡的底線，滑過時變色 */
@@ -195,9 +195,13 @@ button.more:hover { text-decoration: underline; }
 .links button.watch.on { color: var(--trust); border-color: currentColor; }
 button.unwatch { font: inherit; color: var(--muted); background: none; border: 0; cursor: pointer; padding: 0 4px; }
 button.unwatch:hover { color: var(--up); }
-/* 自選股表格：每一欄都靠左，標題跟內容的起點一致（最後的移除按鈕仍放在最右邊）；
-   訊號欄吃掉多出來的寬度，畫面拉寬時數字欄不會被拉得很開 */
-#watchlist th, #watchlist td { text-align: left; }
+/* 同業比較：可以排序的欄位標題、目前這一檔 */
+th button.sort { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; white-space: nowrap; }
+th button.sort:hover, th[aria-sort] button.sort { color: var(--accent); }
+tr.self td { background: color-mix(in srgb, var(--accent) 10%, transparent); font-weight: 600; }
+tr.gap td { color: var(--muted); text-align: center; padding: 0; border-bottom: 0; }
+
+/* 自選股：移除按鈕放在最右邊；訊號欄吃掉多出來的寬度，畫面拉寬時數字欄不會被拉得很開 */
 #watchlist td:last-child { text-align: right; }
 th.flags, td.flags { width: 40%; }
 td.flags { white-space: normal; min-width: 8em; }

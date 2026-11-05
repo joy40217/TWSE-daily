@@ -24,6 +24,9 @@
               損益是當年累計，這裡減去前一季累計換算成單季，前一季沒有資料時為 null；
               EPS 依之後的配股換算成現在的股數（見 quarterly()）；權益是季底餘額，ROE 見 with_equity()
 
+同產業比較：site/data/industry/<產業別>.json，每個產業一份，列出最新交易日有交易的同業（欄位見 peer_row()）；
+個股頁載入自己產業的那一份，不必把同業的資料放進每一檔的 JSON。
+
 另外每檔產生一份精簡摘要 site/data/summary/<代號>.json（約 1～2 KB），給排程任務直接讀最新狀態，
 不必下載完整歷史；每一檔都有，所以看不出使用者追蹤哪些股票。欄位見 summary()。
 """
@@ -38,6 +41,7 @@ import build_db
 ROOT = build_db.ROOT
 OUT_DIR = ROOT / "site" / "data" / "stocks"
 SUMMARY_DIR = ROOT / "site" / "data" / "summary"
+INDUSTRY_DIR = ROOT / "site" / "data" / "industry"
 RECENT = 20   # 摘要裡列最近幾天的走勢
 num = build_db.num
 
@@ -483,6 +487,33 @@ def load_forecast(con, have, latest):
     return out
 
 
+PEER_FIELDS = ["code", "name", "market", "close", "pct", "ret_3m", "pe", "pb", "dy",
+               "eps_4q", "roe_4q", "gross_margin_4q", "net_margin_4q", "revenue_yoy", "revenue_12m"]
+
+
+def peer_row(data, brief, adj):
+    """同業比較的一列（欄位見 PEER_FIELDS）：
+    ret_3m 近 60 個交易日漲幅 %（還原權息）；pe pb dy 最新的本益比、淨值比、殖利率（配股後已修正）；
+    eps_4q roe_4q 近四季 EPS、ROE；gross_margin_4q net_margin_4q 近四季毛利率、淨利率 %（四季合計再相除）；
+    revenue_yoy 最新月營收年增率 %；revenue_12m 近 12 個月營收合計（千元，預設依這個排序）"""
+    closes = [x for x in adj if x is not None]
+    ret = round((closes[-1] / closes[-61] - 1) * 100, 2) if len(closes) > 60 and closes[-61] else None
+    val = brief.get("valuation") or {}
+    fin = brief.get("financials") or {}
+    quarters = [q for q in data.get("fin") or [] if q[1] is not None and q[4] is not None][-4:]
+    keys = [shift_quarter(quarters[-1][0], 3 - j) for j in range(4)] if quarters else []
+    full = len(quarters) == 4 and [q[0] for q in quarters] == keys
+    rev4 = sum(q[1] for q in quarters) if full else None
+    margin = lambda k: (round(sum(q[k] for q in quarters) / rev4 * 100, 2)  # noqa: E731
+                        if rev4 and all(q[k] is not None for q in quarters) else None)
+    rev = data.get("rev") or []
+    rev12 = sum(r[1] for r in rev[-12:]) if len(rev) >= 12 and all(r[1] is not None for r in rev[-12:]) else None
+    price = brief["price"]
+    return [data["code"], data["name"], data["market"], price["close"], price["pct"], ret,
+            val.get("pe"), val.get("pb"), val.get("dy"), fin.get("eps_4q"), fin.get("roe_4q"),
+            margin(2), margin(4), (brief.get("revenue") or {}).get("yoy"), rev12]
+
+
 def build(con, have):
     """產生全部個股 JSON 與個股清單，回傳產生的檔數"""
     for table, col in (("stock_day_all", "Code"), ("institutional", "證券代號"), ("margin", "股票代號"), ("bwibbu_all", "Code"),
@@ -493,7 +524,7 @@ def build(con, have):
         for t in (table, f"tpex_{table}"):
             if t in have:
                 con.execute(f'CREATE INDEX IF NOT EXISTS "idx_{t}_code" ON "{t}" ("{col}")')
-    for folder in (OUT_DIR, SUMMARY_DIR):
+    for folder in (OUT_DIR, SUMMARY_DIR, INDUSTRY_DIR):
         folder.mkdir(parents=True, exist_ok=True)
         for old in folder.glob("*.json"):
             old.unlink()
@@ -507,7 +538,7 @@ def build(con, have):
         dt_days[market] = {r[0] for r in con.execute(f"SELECT DISTINCT _key FROM {trade}")} if trade in have else set()
     forecast = load_forecast(con, have, latest)
     generated_at = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).isoformat(timespec="seconds")
-    listing = []
+    listing, peers = [], {}
     sql = ("SELECT code, date, name, open, high, low, close, volume, value, adj_close, market "
            "FROM stock_day_adj ORDER BY code, date")
     for code, group in groupby(con.execute(sql), key=lambda r: r[0]):
@@ -520,6 +551,13 @@ def build(con, have):
                                                   encoding="utf-8")
         # 個股清單：代號、名稱、產業、最後交易日是否為最新交易日（已下市的股票仍可查歷史）、市場
         listing.append([code, data["name"], data.get("industry", ""), days[-1][0] == latest, data["market"]])
+        if data.get("industry") and days[-1][0] == latest:
+            peers.setdefault(data["industry"], []).append(peer_row(data, brief, [x[8] for x in days]))
+    for industry, rows in peers.items():
+        out = {"industry": industry, "date": latest, "units": {"revenue_12m": "千元", "pct": "%"},
+               "fields": PEER_FIELDS, "rows": sorted(rows, key=lambda r: -(r[-1] or 0))}
+        (INDUSTRY_DIR / f"{industry.replace('/', '_')}.json").write_text(
+            json.dumps(out, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     (ROOT / "site" / "data" / "stocks.json").write_text(json.dumps(listing, ensure_ascii=False, separators=(",", ":")),
                                                           encoding="utf-8")
     return len(listing)
