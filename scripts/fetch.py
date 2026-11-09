@@ -88,14 +88,43 @@ def parse_month(s):
 
 
 RETRY_WAITS = (15, 45)   # 失敗後等幾秒再試；證交所偶爾會回空白或錯誤頁，通常稍等就恢復
+# 被證交所（含公開資訊觀測站）的防火牆擋下時（HTTP 307「因為安全性考量…FOR SECURITY REASONS」），
+# 有時要停久一點才會解除：改用這組比較長的等待時間。整次執行只有第一次擋到放棄前會等這麼久，
+# 之後再擋到就照一般的等待時間，避免整個執行時間被拖得很長
+BLOCK_WAITS = (15, 60, 180, 300)   # 擋一下的話 15 秒就恢復；擋比較久的多等幾次，最多約 9 分鐘
+blocked_out = False   # 已經有一個網址等完 BLOCK_WAITS 還是被擋
+
+
+class Blocked(Exception):
+    """被網站防火牆擋下（回傳安全性錯誤頁）"""
+
+
+def check_blocked(r):
+    head = r.text[:3000] if "html" in r.headers.get("Content-Type", "") else ""
+    if r.status_code == 307 or "FOR SECURITY REASONS" in head or "因為安全性考量" in head:
+        raise Blocked(f"被網站防火牆擋下（HTTP {r.status_code}，「因為安全性考量，您所執行的頁面無法呈現」）")
+
+
+def retry_wait(attempt, error, retries=len(RETRY_WAITS) + 1):
+    """第 attempt 次失敗後要等幾秒；回傳 None 表示不再重試。retries 是一般錯誤最多查幾次"""
+    global blocked_out
+    if isinstance(error, Blocked) and not blocked_out:
+        if attempt <= len(BLOCK_WAITS):
+            return BLOCK_WAITS[attempt - 1]
+        blocked_out = True
+        return None
+    return RETRY_WAITS[min(attempt, len(RETRY_WAITS)) - 1] if attempt < retries else None
 
 
 def get_json(url: str, retries: int = len(RETRY_WAITS) + 1):
     headers = {"User-Agent": "Mozilla/5.0 (twse-daily-archiver)", "Accept": "application/json"}
     verify = True
-    for attempt in range(1, retries + 1):
+    attempt = 0
+    while True:
+        attempt += 1
         try:
             r = requests.get(url, headers=headers, timeout=60, verify=verify)
+            check_blocked(r)
             r.raise_for_status()
             r.encoding = "utf-8"
             try:
@@ -106,32 +135,41 @@ def get_json(url: str, retries: int = len(RETRY_WAITS) + 1):
                 text = title.group(1) if title else re.sub(r"<script.*?</script>|<[^>]+>", " ", r.text, flags=re.S | re.I)
                 body = " ".join(text.split())[:80] or "（空白）"
                 raise ValueError(f"回應不是 JSON（HTTP {r.status_code}，{r.headers.get('Content-Type', '?')}）：{body}")
-        except requests.exceptions.SSLError:
+        except (requests.exceptions.SSLError if verify else ()):   # 略過驗證後還失敗就照一般錯誤處理
             print("  SSL 驗證失敗，改為略過憑證驗證重試")
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
             verify = False
         except Exception as e:  # noqa: BLE001
-            print(f"  第 {attempt} 次失敗：{e}")
-            if attempt < retries:
-                time.sleep(RETRY_WAITS[min(attempt, len(RETRY_WAITS)) - 1])
+            wait = retry_wait(attempt, e, retries)
+            print(f"  第 {attempt} 次失敗：{e}" + (f"，{wait} 秒後重試" if wait else ""))
+            if wait is None:
+                break
+            time.sleep(wait)
     raise RuntimeError(f"無法取得 {url}")
 
 
-def get_text(url: str, encoding: str = "utf-8", data=None, retries: int = len(RETRY_WAITS) + 1):
-    """取得網頁或 CSV 文字（data 有值時用 POST）；找不到（404）回傳 None"""
+def get_text(url: str, encoding: str = "utf-8", data=None):
+    """取得網頁或 CSV 文字（data 有值時用 POST）；找不到（404）回傳 None。
+    被防火牆擋下時會重試，最後丟出例外，不會把錯誤頁當成「沒有資料」"""
     headers = {"User-Agent": "Mozilla/5.0 (twse-daily-archiver)"}
-    for attempt in range(1, retries + 1):
+    attempt = 0
+    while True:
+        attempt += 1
         try:
             r = (requests.post(url, data=data, headers=headers, timeout=60) if data
                  else requests.get(url, headers=headers, timeout=120))
             if r.status_code == 404:
                 return None
+            r.encoding = encoding
+            check_blocked(r)
             r.raise_for_status()
             return r.content.decode(encoding, errors="replace")
         except Exception as e:  # noqa: BLE001
-            print(f"  第 {attempt} 次失敗：{e}")
-            if attempt < retries:
-                time.sleep(RETRY_WAITS[min(attempt, len(RETRY_WAITS)) - 1])
+            wait = retry_wait(attempt, e)
+            print(f"  第 {attempt} 次失敗：{e}" + (f"，{wait} 秒後重試" if wait else ""))
+            if wait is None:
+                break
+            time.sleep(wait)
     raise RuntimeError(f"無法取得 {url}")
 
 
@@ -487,8 +525,13 @@ def mops_summary(page: str, year: int, season: int, market: str = "sii"):
         "encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "isQuery": "Y",
         "TYPEK": market, "year": year - 1911, "season": f"{season:02d}"})
     time.sleep(PAUSE)
+    tables = re.findall(r"<table class='hasBorder'.*?</table>", html or "", re.S)
+    if not tables and "查詢無資料" not in (html or ""):
+        # 不是報表也不是「查詢無資料」（例如錯誤頁），不能當成還沒公布
+        text = " ".join(re.sub(r"<script.*?</script>|<[^>]+>", " ", html or "", flags=re.S).split())[:80]
+        raise RuntimeError(f"公開資訊觀測站回應不是報表：{text or '（空白）'}")
     rows = []
-    for tb in re.findall(r"<table class='hasBorder'.*?</table>", html or "", re.S):
+    for tb in tables:
         head = re.search(r"<tr class='tblHead'>(.*?)</tr>", tb, re.S)
         heads = html_cells(head.group(1)) if head else []
         for tr in re.findall(r"<tr class='(?:even|odd)'>(.*?)</tr>", tb, re.S):
