@@ -21,9 +21,14 @@ concurrency:
   group: daily   # 同一時間只跑一個，避免兩次執行同時 push
   cancel-in-progress: false
 
+env:
+  PYTHONUNBUFFERED: "1"   # 程式輸出馬上寫進 log，每一行的時間戳才準，看得出哪個步驟慢
+
 jobs:
   fetch:
     runs-on: ubuntu-latest
+    outputs:
+      stale: ${{ steps.stale.outputs.stale }}
     steps:
       - uses: actions/checkout@v4
 
@@ -50,11 +55,19 @@ jobs:
             for i in 1 2 3; do git pull --rebase && git push && break; [ $i = 3 ] && exit 1; sleep 30; done
           fi
 
+      # 排程是 Worker 的備援：最新交易日的報告已經完整（Worker 那幾次都跑過了）就不重跑報告，省下 15～20 分鐘；
+      # 這次抓到的其他新資料（季報、股權分散等）隔天下午的報告會一起上網頁
+      - name: 檢查最新報告是否完整
+        id: stale
+        if: always() && github.event_name == 'schedule'
+        run: python scripts/report.py --stale
+
   report:
     needs: fetch
-    # 每次排程都更新網頁（收盤價等先公布的資料先上）；手動執行和 Worker 觸發則看「產生報告」（Worker 固定勾選）；
+    # 排程只在最新交易日的報告還不完整時才產生（見上面的檢查；檢查沒跑成也照樣產生）；
+    # 手動執行和 Worker 觸發則看「產生報告」（Worker 固定勾選）；
     # 抓資料部分失敗也照樣產生報告。Discord 通知由 report.py 判斷：最新交易日第一次有融資融券時才送
-    if: ${{ !cancelled() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.report)) }}
+    if: ${{ !cancelled() && ((github.event_name == 'schedule' && needs.fetch.outputs.stale != 'false') || (github.event_name == 'workflow_dispatch' && inputs.report)) }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -99,9 +112,11 @@ jobs:
       # 網頁發布後才送通知，點連結時一定看得到新報告
       - name: 安裝中文字型（圖表用）
         if: steps.build.outputs.new_day != ''
+        # 只下載圖表用的繁中字型一個檔（約 16 MB）；用 apt 裝整包 fonts-noto-cjk 要 4 分鐘以上
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q fonts-noto-cjk
+          mkdir -p ~/.local/share/fonts
+          curl -fsSL --retry 3 -o ~/.local/share/fonts/NotoSansCJKtc-Regular.otf \
+            https://raw.githubusercontent.com/notofonts/noto-cjk/Sans2.004/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf
           pip install matplotlib
 
       - name: 送出 Discord 通知

@@ -3,6 +3,8 @@
 用法：
   python scripts/report.py                    產生報告資料
   python scripts/report.py --notify 日期      把該日報告送到 Discord（需要環境變數 DISCORD_WEBHOOK_URL）
+  python scripts/report.py --stale            只檢查最新交易日的報告要不要更新（不建資料庫，幾秒內完成），
+                                              在 GitHub Actions 輸出 stale=true / false
 
 產生報告資料時：
   1. 執行 build_db.py 建立 twse.db（含還原權息日 K）
@@ -590,12 +592,26 @@ def notify(day) -> int:
     return 0
 
 
+def stale() -> int:
+    """最新交易日（加權指數與個股行情都有檔案）的報告是否還沒產生或資料不齊；排程備援用來判斷要不要重跑整份報告"""
+    days = sorted(p.stem for p in (build_db.DATA_DIR / "taiex").glob("*/*.csv") if has_file("stock_day_all", p.stem))
+    result = bool(days) and needs_update(days[-1])
+    print(f"最新交易日 {days[-1] if days else '（無）'} 的報告" + ("需要更新" if result else "已完整"))
+    if os.environ.get("GITHUB_OUTPUT"):
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+            f.write(f"stale={'true' if result else 'false'}\n")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="產生收盤後報告")
     ap.add_argument("--notify", metavar="日期", help="把該日報告送到 Discord，例如 2026-10-29")
+    ap.add_argument("--stale", action="store_true", help="只檢查最新交易日的報告要不要更新")
     args = ap.parse_args()
     if args.notify:
         return notify(args.notify)
+    if args.stale:
+        return stale()
 
     build_db.main()
     con = sqlite3.connect(build_db.DB)

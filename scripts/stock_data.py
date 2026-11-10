@@ -73,13 +73,30 @@ def rows_by_code(con, table, code_col, code):
         con.row_factory = None
 
 
-def by_code(con, have, table, code_col, code):
+_columns = {}
+
+
+def columns_of(con, table):
+    if table not in _columns:
+        _columns[table] = {r[1] for r in con.execute(f'PRAGMA table_info("{table}")')}
+    return _columns[table]
+
+
+def by_code(con, have, table, code_col, code, cols=None):
     """上市資料集與對應的上櫃資料集（tpex_ 開頭，欄位相同）合在一起，{日期或年月: row}；
-    上櫃轉上市的股票兩邊都有，日期不會重疊"""
+    上櫃轉上市的股票兩邊都有，日期不會重疊。
+    cols：只取這些欄位（資料表沒有的欄位略過）；每天一筆的大資料表只取用得到的欄位（搭配 COVER 的索引）"""
     out = {}
     for t in (table, f"tpex_{table}"):
-        if t in have:
+        if t not in have:
+            continue
+        if cols is None:
             out.update(rows_by_code(con, t, code_col, code))
+            continue
+        pick = [c for c in cols if c in columns_of(con, t)]
+        fields = ", ".join(["_key"] + ['"' + c + '"' for c in pick])
+        sql = f'SELECT {fields} FROM "{t}" WHERE "{code_col}" = ?'
+        out.update({r[0]: dict(zip(pick, r[1:])) for r in con.execute(sql, (code,))})
     return out
 
 
@@ -226,18 +243,37 @@ def holders(rows):
     return out
 
 
+# 每天每檔一筆的大資料表：{資料表: (代號欄位, 個股頁用到的欄位)}。
+# 建「代號 + 日期 + 這些欄位」的 covering index，逐檔查詢只讀索引、不用到整張表裡東一筆西一筆地找，產生個股資料快好幾倍
+COVER = {
+    "stock_day_all": ("Code", ("Change",)),
+    "institutional": ("證券代號", ("外陸資買賣超股數(不含外資自營商)", "外資買賣超股數", "外資自營商買賣超股數",
+                                 "投信買賣超股數", "自營商買賣超股數")),
+    "margin": ("股票代號", ("融資今日餘額", "融券今日餘額", "融資限額")),
+    "bwibbu_all": ("Code", ("PEratio", "DividendYield", "PBratio")),
+    "day_trading": ("證券代號", ("當日沖銷交易成交股數",)),
+    "sbl_short": ("代號", ("借券賣出當日餘額",)),
+}
+
+
+def daily_rows(con, have, table, code):
+    """COVER 裡的資料表（上市 + 上櫃），只取個股頁用到的欄位：{日期: {欄位: 值}}"""
+    code_col, cols = COVER[table]
+    return by_code(con, have, table, code_col, code, cols)
+
+
 def stock_json(con, have, code, days, dt_days):
     """days: [(日期, 名稱, 開, 高, 低, 收, 量, 金額, 還原收盤, 市場), ...]；dt_days：{市場: 有當沖資料的日子}"""
     d = [x[0] for x in days]
     out = {"code": code, "name": days[-1][1], "market": days[-1][9], "d": d}
     for i, k in enumerate(("o", "h", "l", "c"), start=2):
         out[k] = [x[i] for x in days]
-    official = by_code(con, have, "stock_day_all", "Code", code)
+    official = daily_rows(con, have, "stock_day_all", code)
     out["chg"] = [num(official[day]["Change"]) if day in official else None for day in d]
     out["v"] = [lots(x[6]) for x in days]
     out["val"] = [None if x[7] is None else round(x[7] / 1e6, 1) for x in days]
 
-    inst = by_code(con, have, "institutional", "證券代號", code)
+    inst = daily_rows(con, have, "institutional", code)
     get = lambda day, *names: first(inst[day], *names) if day in inst else None  # noqa: E731
     out["fi"] = [None if day not in inst else lots(
         (get(day, "外陸資買賣超股數(不含外資自營商)", "外資買賣超股數") or 0) + (get(day, "外資自營商買賣超股數") or 0))
@@ -245,13 +281,13 @@ def stock_json(con, have, code, days, dt_days):
     out["tr"] = [lots(get(day, "投信買賣超股數")) if day in inst else None for day in d]
     out["dl"] = [lots(get(day, "自營商買賣超股數")) if day in inst else None for day in d]
 
-    margin = by_code(con, have, "margin", "股票代號", code)
+    margin = daily_rows(con, have, "margin", code)
     balance = lambda day, col: int(num(margin[day][col]) or 0) if day in margin else None  # noqa: E731
     out["mf"] = [balance(day, "融資今日餘額") for day in d]
     out["ms"] = [balance(day, "融券今日餘額") for day in d]
     out["ml"] = [balance(day, "融資限額") for day in d]
 
-    bw = by_code(con, have, "bwibbu_all", "Code", code)
+    bw = daily_rows(con, have, "bwibbu_all", code)
     for k, col in (("pe", "PEratio"), ("dy", "DividendYield"), ("pb", "PBratio")):
         out[k] = [num(bw[day][col]) if day in bw else None for day in d]
     events = share_events(con, have, code)
@@ -274,11 +310,11 @@ def stock_json(con, have, code, days, dt_days):
                           'SELECT "處置起迄時間", "處置措施", "處置條件" FROM {t} WHERE "證券代號" = ?', (code,)))
     out["dp"] = sorted([*map(roc_date, period.split("～")), measure, cond] for period, measure, cond in disp)
 
-    trade = by_code(con, have, "day_trading", "證券代號", code)
+    trade = daily_rows(con, have, "day_trading", code)
     out["dtr"] = [None if day not in dt_days[x[9]] or not x[6] else
                   round((num(trade[day]["當日沖銷交易成交股數"]) or 0) / x[6] * 100, 2) if day in trade else 0
                   for day, x in zip(d, days)]
-    sbl = by_code(con, have, "sbl_short", "代號", code)
+    sbl = daily_rows(con, have, "sbl_short", code)
     out["sb"] = [lots(num(sbl[day]["借券賣出當日餘額"]) or 0) if day in sbl else None for day in d]
     if "shareholding" in have:
         con.row_factory = sqlite3.Row
@@ -523,7 +559,9 @@ def build(con, have):
                        ("ex_rights_detail", "股票代號")):
         for t in (table, f"tpex_{table}"):
             if t in have:
-                con.execute(f'CREATE INDEX IF NOT EXISTS "idx_{t}_code" ON "{t}" ("{col}")')
+                cover = [c for c in COVER[table][1] if c in columns_of(con, t)] if table in COVER else []
+                fields = ", ".join('"' + c + '"' for c in [col] + (["_key"] + cover if cover else []))
+                con.execute(f'CREATE INDEX IF NOT EXISTS "idx_{t}_code" ON "{t}" ({fields})')
     for folder in (OUT_DIR, SUMMARY_DIR, INDUSTRY_DIR):
         folder.mkdir(parents=True, exist_ok=True)
         for old in folder.glob("*.json"):
