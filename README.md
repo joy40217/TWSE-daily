@@ -89,20 +89,20 @@
 
 ### 每日自動抓取
 
-不需要手動操作。「每日抓取證交所資料」workflow 每個平日執行四次：
+不需要手動操作。「每日抓取證交所資料」workflow 每個平日執行三次：
 
 | 台灣時間 | 觸發方式 | 做什麼 |
 |---|---|---|
-| 15:07 | Cloudflare Worker | 抓加權指數、個股收盤行情（約 14:00 公布），先更新網頁（不送通知）；三大法人、本益比等這時還沒公布 |
-| 18:23 | Cloudflare Worker | 抓本益比（約 17:10）、三大法人（約 16:20）等，更新網頁（不送通知） |
+| 18:23 | Cloudflare Worker | 抓加權指數、個股收盤行情（約 14:00 公布）、本益比（約 17:10）、三大法人（約 16:20）等，更新網頁（不送通知） |
 | 22:23 | Cloudflare Worker | 再抓一次（補上晚間公布的融資融券，通常約 21:00 前公布），更新網頁、送 Discord 通知 |
 | 23:47 | GitHub 排程（備援） | 一樣抓資料；最新交易日的報告還不完整（Worker 沒觸發成功）才產生報告、更新網頁，實際多半凌晨 4～5 點才跑 |
 
+原本 15:07 還有一次（先上收盤行情），為了省 Actions 時間（每月約 500 分鐘）拿掉了，收盤行情改在 18:23 一起上網頁。
 Worker 觸發的執行每次都會更新網頁；備援排程只在 `python scripts/report.py --stale` 判斷最新交易日的報告還不完整時才產生報告，報告已完整就只抓資料、不重跑報告（省下 15～20 分鐘的 Actions 時間），這次抓到的季報、股權分散等新資料隔天下午的報告會一起上網頁。
 Discord 通知只在最新交易日的報告「第一次有融資融券」時送一次，所以傍晚先更新的網頁不會觸發通知，晚上補齊後才通知，備援再跑也不會重複通知。
 Discord 的大盤 K 線圖要用中文字型，workflow 只下載一個繁中字型檔（Noto Sans CJK TC，約 16 MB），不用 apt 安裝整包字型。
 
-注意：repo 是私人的，Actions 時間算在每月額度內（Pro 方案每月 3,000 分鐘）。每日 workflow 一天約跑 4 次，回補歷史資料一年份要好幾個小時，大量回補前先到 GitHub Settings → Billing 看剩餘分鐘數。
+注意：repo 是私人的，Actions 時間算在每月額度內（Pro 方案每月 3,000 分鐘）。每日 workflow 一天跑 3 次，回補歷史資料一年份要好幾個小時，大量回補前先到 GitHub Settings → Billing 看剩餘分鐘數。
 
 為什麼不用 GitHub 自己的排程：GitHub 排程在負載高時會延遲，
 2026 年 6～10 月實測每天 UTC 00:00 的排程平均晚 4 小時才跑（10 月約 4.8 小時，最久 10.7 小時），
@@ -137,13 +137,12 @@ Discord 的大盤 K 線圖要用中文字型，workflow 只下載一個繁中字
 2. 名稱填 `twse-daily-dispatch` → Deploy
 3. 按 **Edit code**，把編輯器裡的程式全部換成 `cloudflare/dispatch.js` 的內容 → Deploy
 4. 回到 Worker 頁面 → Settings → **Variables and Secrets** → Add：Type 選 **Secret**，名稱 `GITHUB_TOKEN`，值貼上第 1 步的 token → Deploy
-5. Settings → **Trigger Events** → Add → **Cron Triggers**，加入三個（Cloudflare 也用 UTC）。
+5. Settings → **Trigger Events** → Add → **Cron Triggers**，加入兩個（Cloudflare 也用 UTC）。
    星期要寫 `MON-FRI`：Cloudflare 的星期從 1 = 週日算起，寫 `1-5` 會變成週日到週四，跟 GitHub 不同。
    加好後看旁邊的「Runs」，應該顯示 Monday through Friday：
 
    | Cron | 台灣時間 |
    |---|---|
-   | `7 7 * * MON-FRI` | 15:07 |
    | `23 10 * * MON-FRI` | 18:23 |
    | `23 14 * * MON-FRI` | 22:23 |
 

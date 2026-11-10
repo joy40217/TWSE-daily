@@ -6,8 +6,7 @@
 //
 // 需要的 Secret：GITHUB_TOKEN（fine-grained token，只開放這個 repo、權限 Actions: Read and write）
 // Cron Triggers（UTC，台灣 = UTC+8；星期要寫 MON-FRI，Cloudflare 的 1-5 是週日到週四，跟 GitHub 不同）：
-//   7 7 * * MON-FRI     台灣 15:07  收盤行情
-//   23 10 * * MON-FRI   台灣 18:23  本益比、三大法人
+//   23 10 * * MON-FRI   台灣 18:23  收盤行情、本益比、三大法人（原本 15:07 那次為了省 Actions 時間拿掉了）
 //   23 14 * * MON-FRI   台灣 22:23  融資融券、送 Discord 通知
 
 const REPO = "joy40217/TWSE-daily";

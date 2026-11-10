@@ -1,7 +1,7 @@
 name: 每日抓取證交所資料
 
 on:
-  # 平常由 Cloudflare Worker（cloudflare/dispatch.js）在台灣 15:07、18:23、22:23 用 workflow_dispatch 準時觸發；
+  # 平常由 Cloudflare Worker（cloudflare/dispatch.js）在台灣 18:23、22:23 用 workflow_dispatch 準時觸發；
   # GitHub 自己的排程常延遲 4～5 小時，只留一個當備援：Worker 沒觸發成功時，最晚隔天清晨補上
   schedule:
     - cron: "47 15 * * 1-5"   # UTC，台灣 23:47（實際多半凌晨 4～5 點才跑）；有跑過的日子不會重複通知
