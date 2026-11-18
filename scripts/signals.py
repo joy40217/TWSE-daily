@@ -45,6 +45,7 @@ TZ = dt.timezone(dt.timedelta(hours=8))
 MA_DAYS = (5, 20, 60, 100)
 MA_LABEL = {5: "5 日線", 20: "月線", 60: "季線", 100: "百日線"}
 HORIZONS = (1, 5, 10)
+TIE = 0.005            # 價格差不到 0.005 元視為相等（收盤平之前的高低點）
 
 # 訊號矩陣的欄位（順序固定，跟文件的表格相同）：(key, 中文標題, 方向)
 COLUMNS = (
@@ -361,8 +362,14 @@ def snapshot(s, k, ctx):
     m["prev_ma20"], m["prev_ma60"] = (ma(20, p - 1), ma(60, p - 1)) if p >= 1 else (None, None)
     w = ac[max(0, p - 59):p + 1]
     m["high_60"], m["low_60"] = max(w) * scale, min(w) * scale
-    m["prev59_high"] = max(ac[p - 59:p]) * scale if p >= 59 else None   # 前 59 天的最高收盤（有 60 天才判斷新高）
-    m["prev59_low"] = min(ac[p - 59:p]) * scale if p >= 59 else None
+    # 前 59 天的最高、最低收盤與最近一次出現的日子（有 60 天才判斷新高新低）
+    m["prev59_high"] = m["prev59_low"] = m["prev59_high_date"] = m["prev59_low_date"] = None
+    if p >= 59:
+        prev = list(range(p - 59, p))
+        hi = max(reversed(prev), key=lambda q: ac[q])   # 同樣的價格出現好幾次時取最近的
+        lo = min(reversed(prev), key=lambda q: ac[q])
+        m["prev59_high"], m["prev59_high_date"] = ac[hi] * scale, s.d[s.traded[hi]]
+        m["prev59_low"], m["prev59_low_date"] = ac[lo] * scale, s.d[s.traded[lo]]
     vols = [s.v[j] for j in s.traded[max(0, p - 20):p] if s.v[j] is not None]
     m["vol_avg20"] = avg(vols) if p >= 20 and len(vols) == 20 else None
     m["vol_ratio"] = round(s.v[k] / m["vol_avg20"], 2) if m["vol_avg20"] and s.v[k] is not None else None
@@ -443,13 +450,20 @@ def signals(m, ctx):
         if lines:
             out[key] = (2, "● " + " ".join(lines))
 
+    # 收盤剛好等於之前的最高（最低）收盤也算新高（新低），括號寫上次出現的日子；
+    # 還原價換算有浮點誤差，差不到 0.005 元視為相等。60 天完全沒動（最高＝最低）時不算平新高、新低
+    flat = m["prev59_high"] is not None and m["prev59_high"] - m["prev59_low"] < TIE
     if m["prev59_high"] is not None:
-        if close > m["prev59_high"]:
+        if abs(close - m["prev59_high"]) < TIE and not flat:
+            out["high60"] = (2, f"● 新高（{md(m['prev59_high_date'])}）")
+        elif close > m["prev59_high"]:
             out["high60"] = (2, "● 新高")
         elif m["high_60"] / close - 1 <= 0.03:
             out["high60"] = (1, f"○ 差{(m['high_60'] / close - 1) * 100:.1f}%")
     if m["prev59_low"] is not None:
-        if close < m["prev59_low"]:
+        if abs(close - m["prev59_low"]) < TIE and not flat:
+            out["low60"] = (2, f"● 新低（{md(m['prev59_low_date'])}）")
+        elif close < m["prev59_low"]:
             out["low60"] = (2, "● 新低")
         elif close / m["low_60"] - 1 <= 0.03:
             out["low60"] = (1, f"○ 差{(close / m['low_60'] - 1) * 100:.1f}%")
@@ -553,8 +567,8 @@ def stock_out(s, k, m):
 def star_out(s, k, m, extra):
     """第 7.1 節：⭐ 個股的價位地圖、技術面、籌碼面"""
     close = s.c[k]
-    is_high = m["high_60"] is not None and close >= m["high_60"]
-    is_low = m["low_60"] is not None and close <= m["low_60"]
+    is_high = m["high_60"] is not None and close >= m["high_60"] - TIE
+    is_low = m["low_60"] is not None and close <= m["low_60"] + TIE
     items = [(m["high_60"], "60 日高")] if not is_high else []
     items += [(m[f"ma{n}"], MA_LABEL[n]) for n in (100, 60, 20, 5)]
     items += [(m["low_60"], "60 日低")] if not is_low else []

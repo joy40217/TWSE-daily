@@ -154,7 +154,7 @@ class Synthetic(unittest.TestCase):
         self.assertEqual(s["ma20"], 95.0)          # 還原後之前也是 95
         self.assertEqual(s["pct"], 0.0)
         for key in ("cross_down", "low60", "down_streak"):
-            self.assertFalse(cell(sig, "3333", key).startswith("●"), key)   # 一直持平，60 日低「○ 差0.0%」是對的
+            self.assertFalse(cell(sig, "3333", key).startswith("●"), key)   # 一直持平：不算平新低，「○ 差0.0%」是對的
 
     def test_tpex_margin_blank(self):
         n = len(self.days)
@@ -218,6 +218,21 @@ class Synthetic(unittest.TestCase):
         self.assertEqual(cell(sig, "7002", "cross_up"), "")             # 今天剛好等於均線不算
         self.assertEqual(cell(sig, "7002", "cross_down"), "")
         self.assertEqual(cell(sig, "7003", "cross_down"), "● 月線 季線")
+
+    def test_tie_with_previous_high_low(self):
+        n = len(self.days)
+        up = [100.0] * (n - 30) + [110.0] + [105.0] * 28 + [110.0]      # 今天收盤平 30 天前的最高價
+        down = [100.0] * (n - 30) + [90.0] + [95.0] * 28 + [90.0]
+        make_data(self.root, self.days, {"7101": {"close": up}, "7102": {"close": down},
+                                         "7103": {"close": [100.0] * n}})
+        _, sig, _ = run(self.root, self.days[-1], ["7101", "7102", "7103"], star="7101")
+        d = self.days[n - 30]
+        label = f"{int(d[5:7])}/{int(d[8:])}"
+        self.assertEqual(cell(sig, "7101", "high60"), f"● 新高（{label}）")
+        self.assertEqual(cell(sig, "7102", "low60"), f"● 新低（{label}）")
+        self.assertFalse(cell(sig, "7103", "high60").startswith("●"))   # 完全沒動不算
+        self.assertFalse(cell(sig, "7103", "low60").startswith("●"))
+        self.assertEqual(sig["star"][0]["price_map"][0]["label"], "◀ 收盤（60 日新高）")
 
     def test_ready_missing_margin(self):
         n = len(self.days)
