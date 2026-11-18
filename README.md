@@ -270,7 +270,11 @@ ROE（股東權益報酬率）用歸屬母公司的淨利 ÷ 期初期末平均�
 
 輸出 `signals_<日期>.json`（`ready` 資料就緒檢查、`market` 大盤、`matrix` 17 欄訊號矩陣與 `matrix_md`、`stocks` 每檔指標、
 `star`、`holdings`）與 `backtest_<日期>.json`（`stats` 依方向、依訊號類型的 1／5／10 日後相對大盤報酬與命中率，
-`weekly` 給週報用的濃縮），各有一份 `_latest` 複本；stdout 只印一行摘要。
+`weekly` 給週報用：第 5 個交易日落在本週的訊號、也就是大多是上週出現的訊號，5 日後的驗證結果），各有一份 `_latest` 複本；stdout 只印一行摘要。
+
+持股的出場線每天拿「前一天的線」比：收盤跌破是 ⏳ 待確認（`pending`），之後一直跟**被跌破的那條線**比，
+收盤還在線下是 ❌ 已觸發（`triggered`），站上去才算站回（`recovered`）；這段期間 `exit_line` 顯示被跌破的線，
+依當天收盤重算的線在 `recalc_exit_line`。
 結束代碼 0＝完成；2＝當天必要資料（行情、法人、融資融券、指數）還不齊，或 `--date auto` 時今天的資料還沒 commit
 （`ready.stale`），等幾分鐘重新 clone 再跑；1＝程式錯誤。
 

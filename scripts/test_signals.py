@@ -261,6 +261,20 @@ class Synthetic(unittest.TestCase):
         self.assertEqual(bull["n"] + bull["pending"], 60)
         self.assertEqual(bull["hit"], bull["n"])                        # 大盤不動、每天上漲
 
+    def test_weekly_counts_signals_due_this_week(self):
+        n = len(self.days)   # 最後一天 2026-07-31 是週五
+        close = [100.0] * 70 + [100.0 + i for i in range(1, n - 70 + 1)]
+        make_data(self.root, self.days, {"8890": {"close": close}})
+        _, _, bt = run(self.root, self.days[-1], ["8890"], backtest=True, days=30)
+        w = bt["weekly"]
+        self.assertEqual((w["week"], w["title"]), ("7/27–7/31", "上週訊號、5 日後驗證"))
+        self.assertEqual((w["signal_from"], w["signal_to"]), ("2026-07-20", "2026-07-24"))   # 上週一到週五
+        self.assertEqual((w["bull"]["n"], w["bull"]["hit"], w["bull"]["pending"]), (5, 5, 0))
+        self.assertEqual(w["bull"]["text"], "偏多 5/5")
+        # 週三跑：週一到週三到期的已經有結果，週四、週五到期的還在 pending
+        _, _, bt = run(self.root, "2026-07-29", ["8890"], backtest=True, days=30)
+        self.assertEqual((bt["weekly"]["bull"]["n"], bt["weekly"]["bull"]["pending"]), (3, 2))
+
     def test_backtest_first_signal(self):
         n = len(self.days)
         close = [100.0] * (n - 5) + [101.0, 102.0, 103.0, 104.0, 105.0]
@@ -273,16 +287,15 @@ class Synthetic(unittest.TestCase):
         self.assertFalse(any(e["first"] for e in near))   # 回測開始前就一直有，不算新出現
 
 
-def m(close, ma20=None, ma60=None, high=None, low=None):
+def m(close, ma20=None, ma60=None, high=None, low=None, date=""):
     return {"close": close, "ma20": ma20, "ma60": ma60, "high_60": high if high is not None else close,
-            "low_60": low if low is not None else close}
+            "low_60": low if low is not None else close, "date": date}
 
 
 class Holdings(unittest.TestCase):
-    s = types.SimpleNamespace(code="1111", name={0: "測試"})
-
-    def out(self, cost, today, yesterday=None, before=None):
-        return signals.holding_out(self.s, 0, today, yesterday, before, cost)
+    def out(self, cost, *days):
+        """days：由舊到新的每日指標，最後一個是今天"""
+        return signals.track(cost, [(d, 1.0) for d in days])
 
     def test_profit(self):
         h = self.out(100, m(130, high=140, low=110))
@@ -309,19 +322,34 @@ class Holdings(unittest.TestCase):
         self.assertEqual(h["tp_basis"], "月線")
 
     def test_states(self):
-        line90 = m(95, high=110, low=85)         # 小虧：出場線 max(成本 −10%, 60 日低) = 90
-        broke = m(89, high=110, low=85)          # 跌破 90；變成深虧，出場線改成 60 日低 85
-        below85 = m(84, high=110, low=80)
-        self.assertEqual(self.out(100, broke, line90, line90)["state"], "pending")
-        self.assertEqual(self.out(100, below85, broke, line90)["state"], "triggered")
-        self.assertEqual(self.out(100, m(86, high=110, low=80), broke, line90)["state"], "recovered")
-        self.assertEqual(self.out(100, line90, line90, line90)["state"], "ok")
-        h = self.out(100, broke, line90, line90)
-        self.assertEqual((h["prev_exit_line"], h["exit_line"]), (90, 85))
+        line90 = m(95, high=110, low=85, date="d1")          # 小虧：出場線 max(成本 −10%, 60 日低) = 90
+        broke = m(89, high=110, low=85, date="d2")           # 跌破 90；重算的線會降到 85
+        h = self.out(100, line90, broke)
+        self.assertEqual((h["state"], h["exit_line"], h["recalc_exit_line"], h["broken_since"]), ("pending", 90, 85, "d2"))
+        self.assertTrue(h["broke_today"])
+        self.assertEqual(self.out(100, line90, line90)["state"], "ok")
+        # 隔天收盤還在 90 以下（但在重算的 85 之上）→ 已觸發，出場線仍顯示被跌破的 90
+        h = self.out(100, line90, broke, m(88, high=110, low=80))
+        self.assertEqual((h["state"], h["exit_line"], h["compared_line"]), ("triggered", 90, 90))
+        self.assertTrue(h["broke_yesterday"])
+        self.assertEqual(self.out(100, line90, broke, m(88, low=80), m(87, low=80))["state"], "triggered")
+        # 站上 90 才算站回，隔天起改用重算的線
+        h = self.out(100, line90, broke, m(91, high=110, low=80))
+        self.assertEqual((h["state"], h["exit_line"]), ("recovered", 90))
+        self.assertEqual(self.out(100, line90, broke, m(91, high=110, low=80), m(91, high=110, low=80))["state"], "ok")
+
+    def test_profit_line_kept_after_status_drops(self):
+        # 像台積電：🟢 時的出場線 2,197.25（60 日高 2,585 × 0.85），跌破後掉回 🔵，隔天 2,175 仍在線下
+        day1 = m(2300, high=2585, low=2135)
+        day2 = m(2190, high=2585, low=2135)
+        day3 = m(2175, high=2585, low=2135)
+        self.assertEqual(self.out(1815, day1, day2)["state"], "pending")
+        h = self.out(1815, day1, day2, day3)
+        self.assertEqual((h["state"], h["exit_line"], h["exit_basis"]), ("triggered", 2197.25, "60 日高 −15%"))
 
     def test_turns_green(self):
-        self.assertTrue(self.out(100, m(121, low=100), m(119, low=100))["status_changed_to_green"])
-        self.assertFalse(self.out(100, m(122, low=100), m(121, low=100))["status_changed_to_green"])
+        self.assertTrue(self.out(100, m(119, low=100), m(121, low=100))["status_changed_to_green"])
+        self.assertFalse(self.out(100, m(121, low=100), m(122, low=100))["status_changed_to_green"])
 
 
 SUMMARY = ROOT / "site" / "data" / "summary"

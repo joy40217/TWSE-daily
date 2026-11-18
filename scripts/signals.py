@@ -659,25 +659,54 @@ def lines(cost, m):
     return "deep_loss", *exit_line, *tp
 
 
-def holding_out(s, k, m, m_prev, m_prev2, cost):
-    """m、m_prev、m_prev2：D、D−1、D−2 的指標。出場線是「低於收盤」的線，用當天的收盤去比一定不會跌破，
-    所以觸發一律拿「前一天算出的出場線」比：今天收盤跌破昨天的線＝broke_today，昨天收盤跌破前天的線＝broke_yesterday"""
+def track(cost, snaps):
+    """持股的出場線追蹤。snaps：依日期排序的 [(指標, scale)]，最後一個是 D；scale＝原始收盤 ÷ 還原收盤，
+    用來把某一天算出的價位換算到另一天（中間除權息時價位跟著調整）。
+
+    出場線取「低於收盤」的線，所以每天拿「前一天的出場線」比：今天收盤跌破 → ⏳ 待確認（pending）。
+    跌破之後就記住那條線，之後每天都跟它比（不換成重算後比較低的線）：收盤還在線下 → ❌ 已觸發（triggered），
+    站上去 → 站回（recovered），隔天起恢復用每天重算的出場線"""
+    m = snaps[-1][0]
     status, exit_line, exit_basis, tp, tp_basis = lines(cost, m)
+    states, broken, prev = [], None, None   # broken：(還原價空間的線, 依據, 跌破日)
+    for day, scale in snaps:
+        close, state, against = day["close"], "ok", None
+        if broken:
+            against = (broken[0] * scale, broken[1])
+            if close < against[0]:
+                state = "triggered"
+            else:
+                state, broken = "recovered", None
+        elif prev and prev[0][1] is not None:
+            against = (prev[0][1] / prev[1] * scale, prev[0][2])
+            if close < against[0]:
+                state, broken = "pending", (prev[0][1] / prev[1], prev[0][2], day["date"])
+        states.append((state, against))
+        prev = (lines(cost, day), scale)
+    state, against = states[-1]
+    recalc = exit_line
+    if broken:   # 待確認、已觸發期間顯示被跌破的那條線
+        exit_line, exit_basis = broken[0] * snaps[-1][1], broken[1]
     dist = None if not exit_line else (m["close"] / exit_line - 1) * 100
-    prev_status, prev_exit, prev_basis, *_ = lines(cost, m_prev) if m_prev else (None, None, None)
-    prev2_exit = lines(cost, m_prev2)[1] if m_prev2 else None
-    broke_today = prev_exit is not None and m["close"] < prev_exit
-    broke_yesterday = prev2_exit is not None and m_prev["close"] < prev2_exit
-    state = ("triggered" if broke_today and broke_yesterday else "pending" if broke_today
-             else "recovered" if broke_yesterday else "ok")
-    return {"code": s.code, "name": s.name[k], "cost": cost, "close": m["close"],
-            "pnl_pct": r2((m["close"] / cost - 1) * 100), "status": STATUS[status], "status_key": status,
+    prev_status = lines(cost, snaps[-2][0])[0] if len(snaps) > 1 else None
+    return {"cost": cost, "close": m["close"], "pnl_pct": r2((m["close"] / cost - 1) * 100),
+            "status": STATUS[status], "status_key": status,
             "exit_line": price(exit_line), "exit_basis": exit_basis,
             "tp_line": tp if isinstance(tp, str) else price(tp), "tp_basis": tp_basis,
             "dist_exit_pct": r1(dist), "warn": dist is not None and 0 <= round(dist, 1) <= 3,
-            "prev_exit_line": price(prev_exit), "prev_exit_basis": prev_basis,
-            "broke_today": broke_today, "broke_yesterday": broke_yesterday, "state": state,
+            "state": state, "broken_since": broken[2] if broken else None,
+            "compared_line": None if against is None else price(against[0]),   # 今天收盤拿來比的線
+            "recalc_exit_line": price(recalc),   # 依今天收盤重算的出場線（站回後隔天起用這條）
+            "broke_today": state == "pending",
+            "broke_yesterday": len(states) > 1 and states[-2][0] in ("pending", "triggered"),
             "status_changed_to_green": status == "profit" and prev_status is not None and prev_status != "profit"}
+
+
+def holding_out(s, k, ctx, cost, lookback=60):
+    """從 D 往前 lookback 個交易日開始追蹤出場線（跌破後一直沒站回的線不會因為重算而消失）"""
+    p = s.pos[k]
+    snaps = [(snapshot(s, j, ctx), s.c[j] / s.adj[j]) for j in s.traded[max(0, p - lookback):p + 1]]
+    return {"code": s.code, "name": s.name[k], **track(cost, snaps)}
 
 
 # ---------------------------------------------------------------- 回測
@@ -703,6 +732,7 @@ def backtest(series, codes, cal, di, n_days, ctx, index):
             if k is None or k not in s.pos:
                 continue
             now, before = sig_at(k), sig_at(s.prev_traded(k))
+            due = {f"{h}d": due_date(ti, h, cal, di, ctx) for h in HORIZONS}
             for key, (level, text) in now.items():
                 if key == "earnings":
                     continue
@@ -710,8 +740,19 @@ def backtest(series, codes, cal, di, n_days, ctx, index):
                 for h in HORIZONS:
                     fwd[f"{h}d"] = forward(s, k, ti, h, cal, di, index)
                 events.append({"date": t, "code": code, "key": key, "level": level, "direction": DIRECTION[key],
-                               "text": text, "first": key not in before or before[key][0] < level, "fwd": fwd})
+                               "text": text, "first": key not in before or before[key][0] < level,
+                               "due": due, "fwd": fwd})
     return events, cal[start]
+
+
+def due_date(ti, h, cal, di, ctx):
+    """訊號日之後第 h 個交易日（結果出爐的日子）；超過資料範圍的用休市表往後推算"""
+    if ti + h <= di:
+        return cal[ti + h]
+    day = cal[di]
+    for _ in range(ti + h - di):
+        day = ctx["next_day"](day)
+    return day
 
 
 def forward(s, k, ti, h, cal, di, index):
@@ -761,9 +802,10 @@ def dedupe(events):
 
 
 def stats(events, periods):
+    """periods：{名稱: (說明, 篩選事件的函式)}"""
     out = {}
-    for name, start in periods.items():
-        evs = [e for e in events if e["date"] >= start]
+    for name, (start, keep) in periods.items():
+        evs = [e for e in events if keep(e)]
         both_ = lambda items, direction: {f"{h}d": {"all": cell(items, direction, h),  # noqa: E731
                                                     "first": cell([e for e in items if e["first"]], direction, h)}
                                           for h in HORIZONS}
@@ -775,15 +817,18 @@ def stats(events, periods):
                 if items:
                     by_signal[f"{key}:{level}"] = {"key": key, "title": title, "level": "●" if level == 2 else "○",
                                                    "direction": direction, **both_(items, direction)}
-        out[name] = {"start": start,
+        out[name] = {"start": start, "keep": keep,
                      "by_direction": {d: both_([e for e in grouped if e["direction"] == d], d) for d in ("bull", "bear")},
                      "by_signal": by_signal}
     return out
 
 
-def weekly(st, week_label, h=5):
-    w = st["week"]
-    out = {"week": week_label, "h": h}
+def weekly(st, events, week_label, h=5):
+    """週報用：本週到期的訊號（第 h 個交易日落在本週一到週五，大多是上週出現的訊號）"""
+    w = st["due_week"]
+    dates = sorted(e["date"] for e in events if w["keep"](e))
+    out = {"title": f"上週訊號、{h} 日後驗證", "week": week_label, "h": h,
+           "signal_from": dates[0] if dates else None, "signal_to": dates[-1] if dates else None}
     for d, word in (("bull", "偏多"), ("bear", "偏空")):
         c = w["by_direction"][d][f"{h}d"]["all"]
         out[d] = {"n": c["n"], "hit": c["hit"], "pending": c["pending"], "text": f"{word} {c['hit']}/{c['n']}"}
@@ -791,7 +836,8 @@ def weekly(st, week_label, h=5):
               for v in w["by_signal"].values() if v["direction"] in ("bull", "bear") and v[f"{h}d"]["all"]["n"]]
     ranked.sort(key=lambda x: (-x["hit_rate"], -x["n"], x["key"]))
     out["by_signal"] = ranked
-    out["note"] = f"以 {h} 個交易日後、相對大盤計算；本週較晚的訊號尚未滿 {h} 天，下週會補進統計"
+    out["note"] = (f"統計第 {h} 個交易日落在本週（{week_label}）的訊號，以相對大盤的超額報酬判斷；"
+                   "週間執行時，到期日在今天之後的還在 pending")
     return out
 
 
@@ -940,11 +986,8 @@ def main(argv=None):
         if h["code"] not in snaps:
             hold_rows.append({"code": h["code"], "cost": h["cost"], "close": None, "no_data": True})
             continue
-        s, k, m = snaps[h["code"]]
-        kp = s.prev_traded(k)
-        kpp = s.prev_traded(kp) if kp is not None else None
-        snap = lambda i: snapshot(s, i, ctx) if i is not None else None  # noqa: E731
-        hold_rows.append(holding_out(s, k, m, snap(kp), snap(kpp), h["cost"]))
+        s, k, _ = snaps[h["code"]]
+        hold_rows.append(holding_out(s, k, ctx, h["cost"]))
 
     idx_now, idx_prev = index_close(store, D), index_close(store, prev_day) if prev_day else {}
     market = {name: {"close": idx_now.get(mk),
@@ -965,13 +1008,20 @@ def main(argv=None):
         universe = sorted(series) if args.universe == "all" else watch
         events, start = backtest(series, universe, cal, di, args.backtest_days, ctx, index)
         monday = (dt.date.fromisoformat(D) - dt.timedelta(days=dt.date.fromisoformat(D).weekday())).isoformat()
-        periods = {"week": monday, "4w": cal[max(0, di - 19)], "all": start}
+        fri = friday(D)
+        periods = {"week": (monday, lambda e: e["date"] >= monday),
+                   "due_week": (f"第 5 天在 {monday}～{fri}", lambda e: monday <= e["due"]["5d"] <= fri),
+                   "4w": (cal[max(0, di - 19)], lambda e: e["date"] >= cal[max(0, di - 19)]),
+                   "all": (start, lambda e: True)}
         st = stats(events, periods)
-        week_label = f"{md(monday)}–{md(friday(D))}"
+        week_label = f"{md(monday)}–{md(fri)}"
+        wk = weekly(st, events, week_label)
+        for v in st.values():
+            del v["keep"]
         bt = {"date": D, "generated_at": generated_at, "range": {"start": start, "end": D, "days": args.backtest_days},
               "universe": args.universe, "horizons": list(HORIZONS),
               "hit_rule": "偏多：相對大盤超額報酬 > 0 算命中；偏空：< 0 算命中；hit_rate_abs 用絕對報酬",
-              "stats": st, "weekly": weekly(st, week_label)}
+              "stats": st, "weekly": wk}
         if args.universe != "all":
             bt["events"] = events
         write(out_dir, "backtest", D, bt)
@@ -979,11 +1029,12 @@ def main(argv=None):
 
     warn = sum(1 for h in hold_rows if h.get("warn"))
     pend = sum(1 for h in hold_rows if h.get("state") == "pending")
+    trig = sum(1 for h in hold_rows if h.get("state") == "triggered")
     status = "ok" if ready["ok"] else "missing:" + ",".join(missing)
     if stale:
         status += ",stale"
     print(f"{D} ready={status} matrix={len(matrix)} rows star={len(star_rows)} "
-          f"holdings={len(hold_rows)} ({warn} warn, {pend} pending){bt_text} {time.perf_counter() - t0:.1f}s")
+          f"holdings={len(hold_rows)} ({warn} warn, {pend} pending, {trig} triggered){bt_text} {time.perf_counter() - t0:.1f}s")
     return 0 if ready["ok"] and not stale else 2
 
 
