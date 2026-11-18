@@ -241,6 +241,43 @@ ROE（股東權益報酬率）用歸屬母公司的淨利 ÷ 期初期末平均�
     python -m http.server --directory site            # 開 http://localhost:8000 預覽
     python scripts/report.py --notify 2026-10-29      # 送 Discord（需設定環境變數 DISCORD_WEBHOOK_URL）
 
+### 自選股訊號腳本（給排程任務用）
+
+`scripts/signals.py` 讓排程任務 clone repo 後直接算出自選股的訊號矩陣、⭐ 個股的價位地圖與技術／籌碼數字、
+持股的停損停利線，以及訊號的後續驗證，任務只要讀結果、搜尋新聞、寫文件。
+只讀 `data/` 的 CSV（不必等網站報告產生）、不連網、只用標準函式庫（不用 pip install），**不在 GitHub Actions 裡跑**，不增加 Actions 時間。
+
+只 clone 需要的資料夾（今年＋去年），幾秒就好；repo 改回私有後 clone 網址要帶有讀取權限的 token：
+
+    git clone -q --depth 1 --filter=blob:none --no-checkout https://github.com/joy40217/TWSE-daily repo
+    cd repo
+    git sparse-checkout set --no-cone /scripts/ /data/taiex/ /data/tpex_index/ /data/holiday_schedule/ \
+      /data/ex_rights_forecast/ /data/tpex_ex_rights_forecast/ \
+      /data/stock_day_all/2026/ /data/tpex_stock_day_all/2026/ ...   # 其他資料集同理，見 signals.py 開頭說明
+    git checkout -q
+
+    python scripts/signals.py --date auto --watch 2330,2317,0050 --star 2330 \
+      --holdings holdings.json --backtest --out out/
+
+| 參數 | 說明 |
+|---|---|
+| `--date` | `auto`＝`data/taiex/` 最新的交易日，或 `YYYY-MM-DD` |
+| `--watch`、`--star` | 自選股、⭐ 特別關注的代號（逗號分隔） |
+| `--holdings` | 持股 JSON `[{"code": "2330", "cost": 1050.5}, ...]`（代號可以不在自選股裡） |
+| `--backtest`、`--backtest-days` | 另外輸出訊號驗證（預設回測 120 個交易日） |
+| `--universe` | `watch`（預設）或 `all`（全部上市櫃，只用於回測研究） |
+| `--out` | 輸出資料夾，預設 `out/`（不進 git） |
+
+輸出 `signals_<日期>.json`（`ready` 資料就緒檢查、`market` 大盤、`matrix` 17 欄訊號矩陣與 `matrix_md`、`stocks` 每檔指標、
+`star`、`holdings`）與 `backtest_<日期>.json`（`stats` 依方向、依訊號類型的 1／5／10 日後相對大盤報酬與命中率，
+`weekly` 給週報用的濃縮），各有一份 `_latest` 複本；stdout 只印一行摘要。
+結束代碼 0＝完成；2＝當天必要資料（行情、法人、融資融券、指數）還不齊，或 `--date auto` 時今天的資料還沒 commit
+（`ready.stale`），等幾分鐘重新 clone 再跑；1＝程式錯誤。
+
+均線、60 日高低、連買連賣、5／20 日法人合計跟網站的 `data/summary/<代號>.json` 算法相同（還原權息共用 `build_db.adjust_factors()`）；
+`爆量`、`量縮` 的 20 日均量不含當天。自選股和持股只在指令參數和任務那一端，不會進 repo 或網站。
+測試：`python -m unittest scripts/test_signals.py`（本機有 `site/data/summary/` 時會順便逐檔對網站的數字）。
+
 ### 回補歷史資料
 
 在 Actions 分頁手動執行「回補歷史資料」，填入開始 / 結束日期（結束日期留空 = 昨天）。

@@ -8,3 +8,4 @@ site/data/stocks.json
 site/data/summary/
 site/data/industry/
 site/data/latest.json
+out/

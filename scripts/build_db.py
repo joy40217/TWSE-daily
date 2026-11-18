@@ -81,20 +81,53 @@ def load_ex_events(con):
             print(f"沒有 {table}，這個市場的還原價格等於原始價格")
             continue
         cols = columns(con, table)
-        c_code = pick(cols, "股票代號", "代號")
-        c_before = pick(cols, "除權息前收盤價", "前收盤價")
-        c_ref = pick(cols, "除權息參考價", "參考價", exclude=("減除", "開盤"))
+        c_code, c_before, c_ref = ex_columns(cols)
         if not all((c_code, c_before, c_ref)):
             print(f"{table} 欄位對不上，略過還原計算。實際欄位：{cols}")
             continue
         sql = f"SELECT _key, {q(c_code)}, {q(c_before)}, {q(c_ref)} FROM {q(table)}"
         for day, code, before, ref in con.execute(sql):
-            b, r = num(before), num(ref)
-            if b and r and b > 0:
-                events[str(code).strip()].append((day, r / b))
+            f = ex_factor(before, ref)
+            if f is not None:
+                events[str(code).strip()].append((day, f))
     for v in events.values():
         v.sort()
     return events
+
+
+def ex_columns(cols):
+    """除權息結果表的（代號、除權息前收盤價、除權息參考價）欄位名稱；上市、上櫃、各年份名稱略有不同"""
+    return (pick(cols, "股票代號", "代號"), pick(cols, "除權息前收盤價", "前收盤價"),
+            pick(cols, "除權息參考價", "參考價", exclude=("減除", "開盤")))
+
+
+def ex_factor(before, ref):
+    """一次除權息的還原因子 = 除權息參考價 / 除權息前收盤價；資料不全回傳 None"""
+    b, r = num(before), num(ref)
+    return r / b if b and r and b > 0 else None
+
+
+def suffix_factors(events):
+    """[(除權息日, 因子), ...]（依日期排序）-> (日期列表, 第 i 次（含）之後所有因子的連乘積)"""
+    prods, p = [], 1.0
+    for _, f in reversed(events):
+        p *= f
+        prods.append(p)
+    return [d for d, _ in events], list(reversed(prods))
+
+
+def factor_on(suffix, day):
+    """某一天的還原因子：嚴格晚於當天的所有除權息因子連乘積（沒有就是 1）"""
+    dates, prods = suffix
+    i = bisect.bisect_right(dates, day)
+    return prods[i] if i < len(dates) else 1.0
+
+
+def adjust_factors(events, days):
+    """events: [(除權息日, 因子), ...]；days: 日期列表 -> 每一天的還原因子（還原價 = 原始價 × 因子）。
+    build_adjusted() 與 signals.py 共用，兩邊的還原價算法一定相同"""
+    suffix = suffix_factors(events)
+    return [factor_on(suffix, d) for d in days]
 
 
 MARKETS = (("stock_day_all", "上市"), ("tpex_stock_day_all", "上櫃"))
@@ -105,14 +138,8 @@ def build_adjusted(con):
     if "stock_day_all" not in tables:
         return
     events = load_ex_events(con)
-    # 每檔股票的「之後所有因子連乘積」：suffix[i] = 第 i 次（含）之後所有因子的乘積
-    suffix = {}
-    for code, ev in events.items():
-        prods, p = [], 1.0
-        for _, f in reversed(ev):
-            p *= f
-            prods.append(p)
-        suffix[code] = ([d for d, _ in ev], list(reversed(prods)))
+    # 每檔股票的「之後所有因子連乘積」
+    suffix = {code: suffix_factors(ev) for code, ev in events.items()}
 
     con.execute("""CREATE TABLE stock_day_adj (
         date TEXT, code TEXT, name TEXT, open REAL, high REAL, low REAL, close REAL,
@@ -126,12 +153,7 @@ def build_adjusted(con):
                f'TradeVolume, TradeValue, "Transaction" FROM {q(table)}')
         for day, code, name, o, h, lo, c, vol, val, tx in con.execute(sql):
             code = str(code).strip()
-            factor = 1.0
-            if code in suffix:
-                dates, prods = suffix[code]
-                i = bisect.bisect_right(dates, day)  # 嚴格晚於當天的第一次除權息
-                if i < len(dates):
-                    factor = prods[i]
+            factor = factor_on(suffix[code], day) if code in suffix else 1.0
             o, h, lo, c = num(o), num(h), num(lo), num(c)
             adj = lambda x: round(x * factor, 4) if x is not None else None
             out.append((day, code, name, o, h, lo, c, num(vol), num(val), num(tx),
